@@ -23,7 +23,15 @@
 #include <curl/curl.h>
 #include <curl/multi.h>
 
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <inttypes.h>
+
 #include "util.h"
+#include "mem.h"
 
 #define MIN_LIBCURL_VERSION_NUM 0x075300 // This is the 7.83.0 version in hex as defined in curl/curlver.h
 _Static_assert(LIBCURL_VERSION_NUM, "libcurl >= 7.83.0 is required"); // test for older libcurl versions that don't even have LIBCURL_VERSION_NUM defined (e.g. libcurl 6.5).
@@ -44,6 +52,16 @@ typedef struct {
   struct curl_slist* request_headers;
 } CurlData;
 
+typedef struct {
+  int epfd;
+  int timerfd;
+  CURLM *curl_mhandle;
+} WorkerState;
+
+typedef struct itimerspec itimerspec;
+typedef struct epoll_event epoll_event;
+
+static long worker_latch_timeout = 1000;
 static volatile sig_atomic_t got_sigterm = false;
 static volatile sig_atomic_t got_sighup = false;
 
@@ -70,23 +88,99 @@ handle_sighup(SIGNAL_ARGS)
 static size_t
 body_cb(void *contents, size_t size, size_t nmemb, void *userp)
 {
+  CurlData *cdata = (CurlData*) userp;
   size_t realsize = size * nmemb;
-  StringInfo si = (StringInfo)userp;
-  appendBinaryStringInfo(si, (const char*)contents, (int)realsize);
+  appendBinaryStringInfo(cdata->body, (const char*)contents, (int)realsize);
   return realsize;
+}
+
+static int multi_timer_cb(CURLM *multi, long timeout_ms, WorkerState *ws) {
+  elog(DEBUG2, "multi_timer_cb: Setting timeout to %ld ms\n", timeout_ms);
+
+  itimerspec its =
+    timeout_ms > 0 ?
+    // assign the timeout normally
+    (itimerspec){
+      .it_value.tv_sec = timeout_ms / 1000,
+      .it_value.tv_nsec = (timeout_ms % 1000) * 1000 * 1000,
+    }:
+    timeout_ms == 0 ?
+    /* libcurl wants us to timeout now, however setting both fields of
+     * new_value.it_value to zero disarms the timer. The closest we can
+     * do is to schedule the timer to fire in 1 ns. */
+    (itimerspec){
+      .it_value.tv_sec = 0,
+      .it_value.tv_nsec = 1,
+    }:
+     // libcurl passes a -1 to indicate the timer should be deleted
+    (itimerspec){};
+
+  int no_flags = 0;
+  if (timerfd_settime(ws->timerfd, no_flags, &its, NULL) < 0) {
+    ereport(ERROR, errmsg("timerfd_settime failed"));
+  }
+
+  return 0;
+}
+
+static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, WorkerState *ws, bool *socket_exists) {
+  elog(DEBUG2, "multi_socket_cb: received %s", (static char*[]){ "NONE", "CURL_POLL_IN", "CURL_POLL_OUT", "CURL_POLL_INOUT", "CURL_POLL_REMOVE" }[what]);
+
+  epoll_event ev = {.data.fd = sockfd};
+  int epoll_op;
+
+  if(socket_exists){
+    epoll_op = EPOLL_CTL_MOD;
+  } else {
+    bool exists = true;
+    curl_multi_assign(ws->curl_mhandle, sockfd, &exists);
+    epoll_op = EPOLL_CTL_ADD;
+  }
+
+  switch (what){
+  case CURL_POLL_OUT:
+    ev.events = EPOLLOUT;
+    break;
+  case CURL_POLL_INOUT:
+    break;
+  case CURL_POLL_IN:
+    ev.events = EPOLLIN;
+    break;
+  case CURL_POLL_REMOVE:
+    epoll_op = EPOLL_CTL_DEL;
+    bool exists = false;
+    curl_multi_assign(ws->curl_mhandle, sockfd, &exists);
+    break;
+  default:
+    ereport(ERROR, errmsg("Unexpected CURL_POLL symbol: %d\n", what));
+  }
+
+  if (epoll_ctl(ws->epfd, epoll_op, sockfd, &ev) < 0) {
+    int e = errno;
+    ereport(ERROR, errmsg("epoll_ctl failed for sockfd %d: %s", sockfd, strerror(e)));
+  }
+
+  return 0;
 }
 
 static bool is_extension_loaded(){
   Oid extensionOid;
 
   StartTransactionCommand();
+
   extensionOid = get_extension_oid("pg_net", true);
+
   CommitTransactionCommand();
 
   return OidIsValid(extensionOid);
 }
 
 static void delete_expired_responses(char *ttl){
+  SetCurrentStatementStartTimestamp();
+  StartTransactionCommand();
+  PushActiveSnapshot(GetTransactionSnapshot());
+  SPI_connect();
+
   int ret_code = SPI_execute_with_args("\
     WITH\
     rows AS (\
@@ -109,9 +203,17 @@ static void delete_expired_responses(char *ttl){
   {
     ereport(ERROR, errmsg("Error expiring response table rows: %s", SPI_result_code_string(ret_code)));
   }
+
+  SPI_finish();
+  PopActiveSnapshot();
+  CommitTransactionCommand();
 }
 
 static void insert_failure_response(CURLcode return_code, int64 id){
+  StartTransactionCommand();
+  PushActiveSnapshot(GetTransactionSnapshot());
+  SPI_connect();
+
   int ret_code = SPI_execute_with_args("\
       insert into net._http_response(id, error_msg) values ($1, $2)",
       2,
@@ -123,9 +225,17 @@ static void insert_failure_response(CURLcode return_code, int64 id){
   {
     ereport(ERROR, errmsg("Error when inserting failed response: %s", SPI_result_code_string(ret_code)));
   }
+
+  SPI_finish();
+  PopActiveSnapshot();
+  CommitTransactionCommand();
 }
 
 static void insert_success_response(CurlData *cdata, long http_status_code, char *contentType, Jsonb *jsonb_headers){
+  StartTransactionCommand();
+  PushActiveSnapshot(GetTransactionSnapshot());
+  SPI_connect();
+
   int ret_code = SPI_execute_with_args("\
       insert into net._http_response(id, status_code, content, headers, content_type, timed_out) values ($1, $2, $3, $4, $5, $6)",
       6,
@@ -149,6 +259,10 @@ static void insert_success_response(CurlData *cdata, long http_status_code, char
   {
     ereport(ERROR, errmsg("Error when inserting successful response: %s", SPI_result_code_string(ret_code)));
   }
+
+  SPI_finish();
+  PopActiveSnapshot();
+  CommitTransactionCommand();
 }
 
 static void pfree_curl_data(CurlData *cdata){
@@ -156,10 +270,35 @@ static void pfree_curl_data(CurlData *cdata){
   pfree(cdata->body);
   if(cdata->request_headers) //curl_slist_free_all already handles the NULL case, but be explicit about it
     curl_slist_free_all(cdata->request_headers);
-  pfree(cdata);
 }
 
-static void init_curl_handle(CURLM *curl_mhandle, CurlData *cdata, char *url, char *reqBody, char *method, int32 timeout_milliseconds){
+static void init_curl_handle(CURLM *curl_mhandle, int64 id, Datum urlBin, NullableDatum bodyBin, NullableDatum headersBin, Datum methodBin, int32 timeout_milliseconds){
+  MemoryContext old_ctx = MemoryContextSwitchTo(TopMemoryContext); // needs to switch context as the CurlData will not live the SPI context
+
+  CurlData *cdata = palloc(sizeof(CurlData));
+  cdata->id   = id;
+  cdata->body = makeStringInfo();
+
+  if (!headersBin.isnull) {
+    ArrayType *pgHeaders = DatumGetArrayTypeP(headersBin.value);
+    struct curl_slist *request_headers = NULL;
+
+    request_headers = pg_text_array_to_slist(pgHeaders, request_headers);
+
+    CURL_SLIST_APPEND(request_headers, "User-Agent: pg_net/" EXTVERSION);
+
+    cdata->request_headers = request_headers;
+  }
+
+  char *url = TextDatumGetCString(urlBin);
+
+  char *reqBody = !bodyBin.isnull ? TextDatumGetCString(bodyBin.value) : NULL;
+
+  char *method = TextDatumGetCString(methodBin);
+  if (strcasecmp(method, "GET") != 0 && strcasecmp(method, "POST") != 0 && strcasecmp(method, "DELETE") != 0) {
+    ereport(ERROR, errmsg("Unsupported request method %s", method));
+  }
+
   CURL *curl_ez_handle = curl_easy_init();
   if(!curl_ez_handle)
     ereport(ERROR, errmsg("curl_easy_init()"));
@@ -186,7 +325,7 @@ static void init_curl_handle(CURLM *curl_mhandle, CurlData *cdata, char *url, ch
   }
 
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_WRITEFUNCTION, body_cb);
-  CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_WRITEDATA, cdata->body);
+  CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_WRITEDATA, cdata);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_HEADER, 0L);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_URL, url);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_HTTPHEADER, cdata->request_headers);
@@ -201,12 +340,18 @@ static void init_curl_handle(CURLM *curl_mhandle, CurlData *cdata, char *url, ch
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
 #endif
 
-  CURLMcode code = curl_multi_add_handle(curl_mhandle, curl_ez_handle);
-  if(code != CURLM_OK)
-    ereport(ERROR, errmsg("curl_multi_add_handle returned %s", curl_multi_strerror(code)));
+  EREPORT_MULTI(
+    curl_multi_add_handle(curl_mhandle, curl_ez_handle)
+  );
+
+  MemoryContextSwitchTo(old_ctx);
 }
 
 static void consume_request_queue(CURLM *curl_mhandle){
+  StartTransactionCommand();
+  PushActiveSnapshot(GetTransactionSnapshot());
+  SPI_connect();
+
   int ret_code = SPI_execute_with_args("\
     WITH\
     rows AS (\
@@ -226,49 +371,38 @@ static void consume_request_queue(CURLM *curl_mhandle){
   if (ret_code != SPI_OK_DELETE_RETURNING)
     ereport(ERROR, errmsg("Error getting http request queue: %s", SPI_result_code_string(ret_code)));
 
+
   for (int j = 0; j < SPI_processed; j++) {
     bool tupIsNull = false;
 
     int64 id = DatumGetInt64(SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 1, &tupIsNull));
     EREPORT_NULL_ATTR(tupIsNull, id);
 
-    char *method = TextDatumGetCString(SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 2, &tupIsNull));
-    EREPORT_NULL_ATTR(tupIsNull, method);
-
-    char *url = TextDatumGetCString(SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 3, &tupIsNull));
-    EREPORT_NULL_ATTR(tupIsNull, url);
-
     int32 timeout_milliseconds = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 4, &tupIsNull));
     EREPORT_NULL_ATTR(tupIsNull, timeout_milliseconds);
 
-    if (strcasecmp(method, "GET") != 0 && strcasecmp(method, "POST") != 0 && strcasecmp(method, "DELETE") != 0) {
-      ereport(ERROR, errmsg("Unsupported request method %s", method));
-    }
+    Datum method = SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 2, &tupIsNull);
+    EREPORT_NULL_ATTR(tupIsNull, method);
 
-    CurlData *cdata = palloc(sizeof(CurlData));
+    Datum url = SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 3, &tupIsNull);
+    EREPORT_NULL_ATTR(tupIsNull, url);
 
-    Datum headersBin = SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 5, &tupIsNull);
+    NullableDatum headersBin = {
+      .value = SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 5, &tupIsNull),
+      .isnull = tupIsNull
+    };
 
-    if (!tupIsNull) {
-      ArrayType *pgHeaders = DatumGetArrayTypeP(headersBin);
-      struct curl_slist *request_headers = NULL;
+    NullableDatum bodyBin = {
+      .value = SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 6, &tupIsNull),
+      .isnull = tupIsNull
+    };
 
-      request_headers = pg_text_array_to_slist(pgHeaders, request_headers);
-
-      CURL_SLIST_APPEND(request_headers, "User-Agent: pg_net/" EXTVERSION);
-
-      cdata->request_headers = request_headers;
-    }
-
-    char *reqBody = NULL;
-    Datum bodyBin = SPI_getbinval(SPI_tuptable->vals[j], SPI_tuptable->tupdesc, 6, &tupIsNull);
-    if (!tupIsNull) reqBody = TextDatumGetCString(bodyBin);
-
-    cdata->body = makeStringInfo();
-    cdata->id = id;
-
-    init_curl_handle(curl_mhandle, cdata, url, reqBody, method, timeout_milliseconds);
+    init_curl_handle(curl_mhandle, id, url, bodyBin, headersBin, method, timeout_milliseconds);
   }
+
+  SPI_finish();
+  PopActiveSnapshot();
+  CommitTransactionCommand();
 }
 
 static Jsonb *jsonb_headers_from_curl_handle(CURL *ez_handle){
@@ -291,26 +425,6 @@ static Jsonb *jsonb_headers_from_curl_handle(CURL *ez_handle){
 }
 
 static void insert_curl_responses(CURLM *curl_mhandle){
-  int still_running = 0;
-
-  do {
-    int numfds = 0;
-
-    int res = curl_multi_perform(curl_mhandle, &still_running);
-
-    if(res != CURLM_OK) {
-      ereport(ERROR, errmsg("error: curl_multi_perform() returned %d", res));
-    }
-
-    /*wait at least 1 second(1000 ms) in case all responses are slow*/
-    /*this avoids busy waiting and higher CPU usage*/
-    res = curl_multi_wait(curl_mhandle, NULL, 0, 1000, &numfds);
-
-    if(res != CURLM_OK) {
-      ereport(ERROR, errmsg("error: curl_multi_wait() returned %d", res));
-    }
-  } while(still_running);
-
   int msgs_left=0;
   CURLMsg *msg = NULL;
 
@@ -357,17 +471,42 @@ void pg_net_worker(Datum main_arg) {
 
   BackgroundWorkerInitializeConnection(guc_database_name, NULL, 0);
 
-  elog(INFO, "pg_net_worker started with a config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", guc_ttl, guc_batch_size, guc_database_name);
+  elog(LOG, "pg_net_worker started with pid %d and config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
-  int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
+  int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
   if(curl_ret != CURLE_OK)
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
-  while (!got_sigterm)
-  {
+  WorkerState ws = {
+    .epfd = epoll_create1(0),
+    .timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC),
+    .curl_mhandle = curl_multi_init(),
+  };
+
+  if (ws.epfd < 0) {
+    ereport(ERROR, errmsg("Failed to create epoll file descriptor"));
+  }
+
+  if (ws.timerfd < 0) {
+    ereport(ERROR, errmsg("Failed to create timerfd"));
+  }
+
+  if(!ws.curl_mhandle)
+    ereport(ERROR, errmsg("curl_multi_init()"));
+
+  timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
+
+  epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
+
+  curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);
+  curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETDATA, &ws);
+  curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
+  curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERDATA, &ws);
+
+  while (!got_sigterm) {
     WaitLatch(&MyProc->procLatch,
           WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-          1000L,
+          worker_latch_timeout,
           PG_WAIT_EXTENSION);
     ResetLatch(&MyProc->procLatch);
 
@@ -383,28 +522,67 @@ void pg_net_worker(Datum main_arg) {
       ProcessConfigFile(PGC_SIGHUP);
     }
 
-    SetCurrentStatementStartTimestamp();
-    StartTransactionCommand();
-    PushActiveSnapshot(GetTransactionSnapshot());
-    SPI_connect();
-
     delete_expired_responses(guc_ttl);
 
-    CURLM *curl_mhandle = curl_multi_init();
-    if(!curl_mhandle)
-      ereport(ERROR, errmsg("curl_multi_init()"));
+    consume_request_queue(ws.curl_mhandle);
 
-    consume_request_queue(curl_mhandle);
-    insert_curl_responses(curl_mhandle);
+    int running_handles = 0;
 
-    curl_ret = curl_multi_cleanup(curl_mhandle);
-    if(curl_ret != CURLM_OK)
-      ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
+    epoll_event *events = palloc0(sizeof(epoll_event) * guc_batch_size);
 
-    SPI_finish();
-    PopActiveSnapshot();
-    CommitTransactionCommand();
+    do {
+      int maxevents = guc_batch_size + 1; // 1 extra for the timer
+      int timeout = 1000; // 1 second
+      int nfds = epoll_wait(ws.epfd, events, maxevents, timeout);
+      if (nfds < 0) {
+        int save_errno = errno;
+        if(save_errno == EINTR) {
+          continue;
+        }
+        else {
+          ereport(ERROR, errmsg("epoll_wait() failed: %s", strerror(save_errno)));
+          break;
+        }
+      }
+
+      for (int i = 0; i < nfds; i++) {
+        if (events[i].data.fd == ws.timerfd) {
+          EREPORT_MULTI(
+            curl_multi_socket_action(ws.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
+          );
+        } else {
+          int ev_bitmask =
+            events[i].events & EPOLLIN ? CURL_CSELECT_IN:
+            events[i].events & EPOLLOUT ? CURL_CSELECT_OUT:
+            CURL_CSELECT_ERR;
+
+          EREPORT_MULTI(
+            curl_multi_socket_action(
+              ws.curl_mhandle, events[i].data.fd,
+              ev_bitmask,
+              &running_handles)
+          );
+
+          if(running_handles <= 0) {
+            elog(DEBUG2, "last transfer done, kill timeout");
+            timerfd_settime(ws.timerfd, 0, &(itimerspec){0}, NULL);
+          }
+        }
+
+        insert_curl_responses(ws.curl_mhandle);
+      }
+    } while (running_handles > 0); // run again while there are curl handles, this will prevent waiting for the latch_timeout (which will cause the cause the curl timeouts to be wrong)
+
+    pfree(events);
   }
+
+  curl_ret = curl_multi_cleanup(ws.curl_mhandle);
+  if(curl_ret != CURLM_OK)
+    ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
+
+  close(ws.epfd);
+  close(ws.timerfd);
+  curl_global_cleanup();
 
   // causing a failure on exit will make the postmaster process restart the bg worker
   proc_exit(EXIT_FAILURE);
