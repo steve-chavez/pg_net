@@ -1,8 +1,7 @@
 { postgresql, writeShellScriptBin } :
 
 let
-  LOGMIN = builtins.getEnv "LOGMIN";
-  logMin = if builtins.stringLength LOGMIN == 0 then "WARNING" else LOGMIN; # warning is the default in pg
+  log_min_messages = "INFO";
   ver = builtins.head (builtins.splitVersion postgresql.version);
   script = ''
     set -euo pipefail
@@ -20,7 +19,7 @@ let
 
     PGTZ=UTC initdb --no-locale --encoding=UTF8 --nosync -U "$PGUSER"
 
-    options="-F -c listen_addresses=\"\" -c log_min_messages=${logMin} -k $PGDATA"
+    options="-F -c listen_addresses=\"\" -c log_min_messages=${log_min_messages} -k $PGDATA"
 
     ext_options="-c shared_preload_libraries=\"pg_net\""
 

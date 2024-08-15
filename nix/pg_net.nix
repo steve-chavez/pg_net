@@ -3,9 +3,12 @@
 stdenv.mkDerivation {
   name = "pg_net";
 
-  buildInputs = [ postgresql curl ];
+  buildInputs = [ postgresql (curl.overrideAttrs(finalAttrs: previousAttrs: {dontStrip = true; separateDebugInfo = false; configureFlags = previousAttrs.configureFlags ++ ["--enable-debug"]; })) ];
 
   src = ../.;
+
+  # this is enough for debug info enable debug info
+  dontStrip = true;
 
   installPhase = ''
     mkdir -p $out/bin

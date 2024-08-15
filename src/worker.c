@@ -354,7 +354,7 @@ void pg_net_worker(Datum main_arg) {
 
   BackgroundWorkerInitializeConnection(guc_database_name, NULL, 0);
 
-  elog(INFO, "pg_net_worker started with a config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", guc_ttl, guc_batch_size, guc_database_name);
+  elog(INFO, "pg_net_worker started with pid %d and a config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
   int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
   if(curl_ret != CURLE_OK)

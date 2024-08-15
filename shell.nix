@@ -14,22 +14,24 @@ mkShell {
   buildInputs =
     let
       supportedPgVersions = [
-        postgresql_12
-        postgresql_13
-        postgresql_14
-        postgresql_15
+        #postgresql_12
+        #postgresql_13
+        #postgresql_14
+        #postgresql_15
         postgresql_16
       ];
       pgWithExt = { pg }: pg.withPackages (p: [ (callPackage ./nix/pg_net.nix { postgresql = pg;}) ]);
       extAll = map (x: callPackage ./nix/pgScript.nix { postgresql = pgWithExt { pg = x;}; }) supportedPgVersions;
       nginxScript = callPackage ./nix/nginxScript.nix {};
       pathodScript = callPackage ./nix/pathodScript.nix { mitmproxy = oldNixpkgs.mitmproxy; };
+      gdbScript = callPackage ./nix/gdbScript.nix {};
       pythonDeps = with python3Packages; [
         pytest
         psycopg2
         sqlalchemy
       ];
       format = callPackage ./nix/format.nix {};
+      #'';
     in
     [
       extAll
@@ -37,6 +39,7 @@ mkShell {
       format.do format.doCheck
       nginxScript
       pathodScript
+      gdbScript
     ];
   shellHook = ''
     export HISTFILE=.history
