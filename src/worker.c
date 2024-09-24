@@ -124,7 +124,8 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, WorkerState *ws) {
 }
 
 static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, WorkerState *ws, bool *socket_exists) {
-  elog(DEBUG2, "multi_socket_cb: received %s", (static char*[]){ "NONE", "CURL_POLL_IN", "CURL_POLL_OUT", "CURL_POLL_INOUT", "CURL_POLL_REMOVE" }[what]);
+  static char *whatstrs[] = { "NONE", "CURL_POLL_IN", "CURL_POLL_OUT", "CURL_POLL_INOUT", "CURL_POLL_REMOVE" };
+  elog(DEBUG2, "multi_socket_cb: received %s", whatstrs[what]);
 
   epoll_event ev = {.data.fd = sockfd};
   int epoll_op;
@@ -473,7 +474,8 @@ void pg_net_worker(Datum main_arg) {
 
   elog(LOG, "pg_net_worker started with pid %d and config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
-  int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
+  /*int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);*/
+  int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
   if(curl_ret != CURLE_OK)
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
