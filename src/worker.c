@@ -590,6 +590,12 @@ void pg_net_worker(Datum main_arg) {
       if(curl_ret != CURLM_OK)
         ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
 
+      curl_global_cleanup();
+
+      curl_ret = curl_global_init(CURL_GLOBAL_ALL);
+      if(curl_ret != CURLE_OK)
+        ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
+
       ws.curl_mhandle = curl_multi_init(),
       curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);
       curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETDATA, &ws);
