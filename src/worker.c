@@ -52,6 +52,9 @@ typedef struct {
   int64 id;
   StringInfo body;
   struct curl_slist* request_headers;
+  char* url;
+  char *reqBody;
+  char *method;
 } CurlData;
 
 typedef struct {
@@ -274,6 +277,12 @@ static void pfree_curl_data(CurlData *cdata){
   pfree(cdata->body);
   if(cdata->request_headers) //curl_slist_free_all already handles the NULL case, but be explicit about it
     curl_slist_free_all(cdata->request_headers);
+  if(cdata->url)
+    pfree(cdata->url);
+  if(cdata->reqBody)
+    pfree(cdata->reqBody);
+  if(cdata->method)
+    pfree(cdata->method);
   pfree(cdata);
 }
 
@@ -295,29 +304,30 @@ static void init_curl_handle(CURLM *curl_mhandle, int64 id, Datum urlBin, Nullab
     cdata->request_headers = request_headers;
   }
 
-  char *url = TextDatumGetCString(urlBin);
+  cdata->url = TextDatumGetCString(urlBin);
 
-  char *reqBody = !bodyBin.isnull ? TextDatumGetCString(bodyBin.value) : NULL;
+  cdata->reqBody = !bodyBin.isnull ? TextDatumGetCString(bodyBin.value) : NULL;
 
-  char *method = TextDatumGetCString(methodBin);
-  if (strcasecmp(method, "GET") != 0 && strcasecmp(method, "POST") != 0 && strcasecmp(method, "DELETE") != 0) {
-    ereport(ERROR, errmsg("Unsupported request method %s", method));
+  cdata->method = TextDatumGetCString(methodBin);
+
+  if (strcasecmp(cdata->method, "GET") != 0 && strcasecmp(cdata->method, "POST") != 0 && strcasecmp(cdata->method, "DELETE") != 0) {
+    ereport(ERROR, errmsg("Unsupported request method %s", cdata->method));
   }
 
   CURL *curl_ez_handle = curl_easy_init();
   if(!curl_ez_handle)
     ereport(ERROR, errmsg("curl_easy_init()"));
 
-  if (strcasecmp(method, "GET") == 0) {
-    if (reqBody) {
-      CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_POSTFIELDS, reqBody);
+  if (strcasecmp(cdata->method, "GET") == 0) {
+    if (cdata->reqBody) {
+      CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_POSTFIELDS, cdata->reqBody);
       CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_CUSTOMREQUEST, "GET");
     }
   }
 
-  if (strcasecmp(method, "POST") == 0) {
-    if (reqBody) {
-      CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_POSTFIELDS, reqBody);
+  if (strcasecmp(cdata->method, "POST") == 0) {
+    if (cdata->reqBody) {
+      CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_POSTFIELDS, cdata->reqBody);
     }
     else {
       CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_POST, 1);
@@ -325,14 +335,14 @@ static void init_curl_handle(CURLM *curl_mhandle, int64 id, Datum urlBin, Nullab
     }
   }
 
-  if (strcasecmp(method, "DELETE") == 0) {
+  if (strcasecmp(cdata->method, "DELETE") == 0) {
     CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_CUSTOMREQUEST, "DELETE");
   }
 
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_WRITEFUNCTION, body_cb);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_WRITEDATA, cdata);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_HEADER, 0L);
-  CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_URL, url);
+  CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_URL, cdata->url);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_HTTPHEADER, cdata->request_headers);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_TIMEOUT_MS, timeout_milliseconds);
   CURL_EZ_SETOPT(curl_ez_handle, CURLOPT_PRIVATE, cdata);
