@@ -274,6 +274,7 @@ static void pfree_curl_data(CurlData *cdata){
   pfree(cdata->body);
   if(cdata->request_headers) //curl_slist_free_all already handles the NULL case, but be explicit about it
     curl_slist_free_all(cdata->request_headers);
+  pfree(cdata);
 }
 
 static void init_curl_handle(CURLM *curl_mhandle, int64 id, Datum urlBin, NullableDatum bodyBin, NullableDatum headersBin, Datum methodBin, int32 timeout_milliseconds){
