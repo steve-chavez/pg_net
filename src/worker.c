@@ -481,7 +481,8 @@ void pg_net_worker(Datum main_arg) {
 
   elog(LOG, "pg_net_worker started with pid %d and config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
-  int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
+  int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
+  /*int curl_ret = curl_global_init(CURL_GLOBAL_ALL);*/
   if(curl_ret != CURLE_OK)
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
@@ -510,7 +511,6 @@ void pg_net_worker(Datum main_arg) {
   timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
 
   epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
-
 
   while (!got_sigterm) {
     WaitLatch(&MyProc->procLatch,
@@ -592,6 +592,24 @@ void pg_net_worker(Datum main_arg) {
         ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
 
       curl_global_cleanup();
+
+      close(ws.epfd);
+      close(ws.timerfd);
+
+      ws.epfd = epoll_create1(0);
+      ws.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+
+      if (ws.epfd < 0) {
+        ereport(ERROR, errmsg("Failed to create epoll file descriptor"));
+      }
+
+      if (ws.timerfd < 0) {
+        ereport(ERROR, errmsg("Failed to create timerfd"));
+      }
+
+      timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
+
+      epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
 
       curl_ret = curl_global_init(CURL_GLOBAL_ALL);
       if(curl_ret != CURLE_OK)
