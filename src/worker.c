@@ -474,8 +474,8 @@ void pg_net_worker(Datum main_arg) {
 
   elog(LOG, "pg_net_worker started with pid %d and config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
-  /*int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);*/
-  int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
+  int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
+  /*int curl_ret = curl_global_init(CURL_GLOBAL_ALL);*/
   if(curl_ret != CURLE_OK)
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
@@ -573,6 +573,7 @@ void pg_net_worker(Datum main_arg) {
 
         insert_curl_responses(ws.curl_mhandle);
       }
+
     } while (running_handles > 0); // run again while there are curl handles, this will prevent waiting for the latch_timeout (which will cause the cause the curl timeouts to be wrong)
 
     pfree(events);
