@@ -37,6 +37,8 @@
 _Static_assert(LIBCURL_VERSION_NUM, "libcurl >= 7.83.0 is required"); // test for older libcurl versions that don't even have LIBCURL_VERSION_NUM defined (e.g. libcurl 6.5).
 _Static_assert(LIBCURL_VERSION_NUM >= MIN_LIBCURL_VERSION_NUM, "libcurl >= 7.83.0 is required");
 
+#define RECYCLE_MULTI_HANDLE_AT 5000
+
 PG_MODULE_MAGIC;
 
 static char *guc_ttl;
@@ -56,6 +58,7 @@ typedef struct {
   int epfd;
   int timerfd;
   CURLM *curl_mhandle;
+  size_t multi_handle_count;
 } WorkerState;
 
 typedef struct itimerspec itimerspec;
@@ -425,9 +428,10 @@ static Jsonb *jsonb_headers_from_curl_handle(CURL *ez_handle){
   return jsonb_headers;
 }
 
-static void insert_curl_responses(CURLM *curl_mhandle){
+static void insert_curl_responses(WorkerState *ws){
   int msgs_left=0;
   CURLMsg *msg = NULL;
+  CURLM *curl_mhandle = ws->curl_mhandle;
 
   while ((msg = curl_multi_info_read(curl_mhandle, &msgs_left))) {
     if (msg->msg == CURLMSG_DONE) {
@@ -461,6 +465,8 @@ static void insert_curl_responses(CURLM *curl_mhandle){
       ereport(ERROR, errmsg("curl_multi_info_read(), CURLMsg=%d\n", msg->msg));
     }
   }
+
+  ws->multi_handle_count++;
 }
 
 void pg_net_worker(Datum main_arg) {
@@ -474,8 +480,7 @@ void pg_net_worker(Datum main_arg) {
 
   elog(LOG, "pg_net_worker started with pid %d and config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
-  int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
-  /*int curl_ret = curl_global_init(CURL_GLOBAL_ALL);*/
+  int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
   if(curl_ret != CURLE_OK)
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
@@ -496,14 +501,15 @@ void pg_net_worker(Datum main_arg) {
   if(!ws.curl_mhandle)
     ereport(ERROR, errmsg("curl_multi_init()"));
 
-  timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
-
-  epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
-
   curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);
   curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETDATA, &ws);
   curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
   curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERDATA, &ws);
+
+  timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
+
+  epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
+
 
   while (!got_sigterm) {
     WaitLatch(&MyProc->procLatch,
@@ -571,17 +577,29 @@ void pg_net_worker(Datum main_arg) {
           }
         }
 
-        insert_curl_responses(ws.curl_mhandle);
+        insert_curl_responses(&ws);
       }
 
     } while (running_handles > 0); // run again while there are curl handles, this will prevent waiting for the latch_timeout (which will cause the cause the curl timeouts to be wrong)
 
     pfree(events);
-  }
 
-  curl_ret = curl_multi_cleanup(ws.curl_mhandle);
-  if(curl_ret != CURLM_OK)
-    ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
+    if (ws.multi_handle_count >= RECYCLE_MULTI_HANDLE_AT) {
+      elog(LOG, "recycling curl multi handle at: %zu", ws.multi_handle_count);
+      curl_ret = curl_multi_cleanup(ws.curl_mhandle);
+      if(curl_ret != CURLM_OK)
+        ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
+
+      ws.curl_mhandle = curl_multi_init(),
+      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);
+      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETDATA, &ws);
+      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
+      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERDATA, &ws);
+
+      ws.multi_handle_count = 0;
+    }
+
+  }
 
   close(ws.epfd);
   close(ws.timerfd);
