@@ -6,6 +6,7 @@ with import (builtins.fetchTarball {
 mkShell {
   buildInputs =
     let
+      ourCurl = callPackage ./nix/curl.nix {};
       pidFileName = "net_worker.pid";
       supportedPgVersions = [
         postgresql_12
@@ -14,7 +15,7 @@ mkShell {
         postgresql_15
         postgresql_16
       ];
-      pgWithExt = { pg }: pg.withPackages (p: [ (callPackage ./nix/pg_net.nix { postgresql = pg;}) ]);
+      pgWithExt = { pg }: pg.withPackages (p: [ (callPackage ./nix/pg_net.nix { postgresql = pg; curl = ourCurl; }) ]);
       extAll = map (x: callPackage ./nix/pgScript.nix { postgresql = pgWithExt { pg = x;}; inherit pidFileName;}) supportedPgVersions;
       gdbScript = callPackage ./nix/gdbScript.nix {inherit pidFileName;};
       nginxCustom = callPackage ./nix/nginxCustom.nix {};

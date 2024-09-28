@@ -103,8 +103,12 @@ in {
 
     services.postgresql = {
       enable = true;
-      package = pkgs.postgresql_15.withPackages (p: [
-        (pkgs.callPackage ./pg_net.nix { postgresql = pkgs.postgresql_15;})
+      package = pkgs.postgresql_15.withPackages (p:
+      let
+        ourCurl = pkgs.callPackage ./curl.nix {};
+      in
+      [
+        (pkgs.callPackage ./pg_net.nix { postgresql = pkgs.postgresql_15; curl = ourCurl; })
       ]);
       authentication = pkgs.lib.mkOverride 10 ''
         local   all all trust
