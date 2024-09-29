@@ -47,6 +47,8 @@ static char *guc_ttl;
 static int guc_batch_size;
 static char* guc_database_name;
 
+static MemoryContext CurlMemContext = NULL;
+
 void _PG_init(void);
 PGDLLEXPORT void pg_net_worker(Datum main_arg) pg_attribute_noreturn();
 
@@ -289,7 +291,7 @@ static void pfree_curl_data(CurlData *cdata){
 }
 
 static void init_curl_handle(CURLM *curl_mhandle, int64 id, Datum urlBin, NullableDatum bodyBin, NullableDatum headersBin, Datum methodBin, int32 timeout_milliseconds){
-  MemoryContext old_ctx = MemoryContextSwitchTo(TopMemoryContext); // needs to switch context as the CurlData will not live the SPI context
+  MemoryContext old_ctx = MemoryContextSwitchTo(CurlMemContext); // needs to switch context as the CurlData will not live the SPI context
 
   CurlData *cdata = palloc(sizeof(CurlData));
   cdata->id   = id;
@@ -442,6 +444,7 @@ static Jsonb *jsonb_headers_from_curl_handle(CURL *ez_handle){
 }
 
 static void insert_curl_responses(WorkerState *ws){
+  MemoryContext old_ctx = MemoryContextSwitchTo(CurlMemContext); // needs to switch context as the CurlData will not live the SPI context
   int msgs_left=0;
   CURLMsg *msg = NULL;
   CURLM *curl_mhandle = ws->curl_mhandle;
@@ -480,6 +483,7 @@ static void insert_curl_responses(WorkerState *ws){
   }
 
   ws->multi_handle_count++;
+  MemoryContextSwitchTo(old_ctx);
 }
 
 void pg_net_worker(Datum main_arg) {
@@ -615,6 +619,8 @@ void pg_net_worker(Datum main_arg) {
       ws.multi_handle_count = 0;
     }
 
+    MemoryContextResetAndDeleteChildren(CurlMemContext);
+
   }
 
   close(ws.epfd);
@@ -644,6 +650,13 @@ void _PG_init(void) {
     .bgw_name = "pg_net " EXTVERSION " worker",
     .bgw_restart_time = 1,
   });
+
+
+  CurlMemContext = AllocSetContextCreate(TopMemoryContext,
+                       "curl context",
+                       ALLOCSET_DEFAULT_MINSIZE,
+                       ALLOCSET_DEFAULT_INITSIZE,
+                       ALLOCSET_DEFAULT_MAXSIZE);
 
   DefineCustomStringVariable("pg_net.ttl",
                  "time to live for request/response rows",
