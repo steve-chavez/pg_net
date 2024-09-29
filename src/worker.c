@@ -562,12 +562,11 @@ void pg_net_worker(Datum main_arg) {
 
     int running_handles = 0;
 
-    epoll_event *events = palloc0(sizeof(epoll_event) * guc_batch_size);
+    epoll_event events[100];
 
     do {
-      int maxevents = guc_batch_size + 1; // 1 extra for the timer
       int timeout = 1000; // 1 second
-      int nfds = epoll_wait(ws.epfd, events, maxevents, timeout);
+      int nfds = epoll_wait(ws.epfd, events, 100, timeout);
       if (nfds < 0) {
         int save_errno = errno;
         if(save_errno == EINTR) {
@@ -607,8 +606,6 @@ void pg_net_worker(Datum main_arg) {
       }
 
     } while (running_handles > 0); // run again while there are curl handles, this will prevent waiting for the latch_timeout (which will cause the cause the curl timeouts to be wrong)
-
-    pfree(events);
 
     if (ws.multi_handle_count >= RECYCLE_MULTI_HANDLE_AT) {
       elog(LOG, "recycling curl multi handle at: %zu", ws.multi_handle_count);
