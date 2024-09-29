@@ -622,12 +622,28 @@ void pg_net_worker(Datum main_arg) {
       ws.multi_handle_count = 0;
     }
 
+    close(ws.epfd);
+    close(ws.timerfd);
+
+    ws.epfd = epoll_create1(0);
+    ws.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+
+    if (ws.epfd < 0) {
+      ereport(ERROR, errmsg("Failed to create epoll file descriptor"));
+    }
+
+    if (ws.timerfd < 0) {
+      ereport(ERROR, errmsg("Failed to create timerfd"));
+    }
+
+    timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
+
+    epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
+
     MemoryContextResetAndDeleteChildren(CurlMemContext);
 
   }
 
-  close(ws.epfd);
-  close(ws.timerfd);
   curl_global_cleanup();
 
   // causing a failure on exit will make the postmaster process restart the bg worker
