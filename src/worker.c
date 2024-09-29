@@ -98,14 +98,17 @@ handle_sighup(SIGNAL_ARGS)
 static size_t
 body_cb(void *contents, size_t size, size_t nmemb, void *userp)
 {
+  MemoryContext old_ctx = MemoryContextSwitchTo(CurlMemContext); // needs to switch context as the CurlData will not live the SPI context
   CurlData *cdata = (CurlData*) userp;
   size_t realsize = size * nmemb;
   appendBinaryStringInfo(cdata->body, (const char*)contents, (int)realsize);
+  MemoryContextSwitchTo(old_ctx);
   return realsize;
 }
 
 static int multi_timer_cb(CURLM *multi, long timeout_ms, WorkerState *ws) {
   elog(DEBUG2, "multi_timer_cb: Setting timeout to %ld ms\n", timeout_ms);
+  MemoryContext old_ctx = MemoryContextSwitchTo(CurlMemContext); // needs to switch context as the CurlData will not live the SPI context
 
   itimerspec its =
     timeout_ms > 0 ?
@@ -130,10 +133,12 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, WorkerState *ws) {
     ereport(ERROR, errmsg("timerfd_settime failed"));
   }
 
+  MemoryContextSwitchTo(old_ctx);
   return 0;
 }
 
 static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, WorkerState *ws, bool *socket_exists) {
+  MemoryContext old_ctx = MemoryContextSwitchTo(CurlMemContext); // needs to switch context as the CurlData will not live the SPI context
   static char *whatstrs[] = { "NONE", "CURL_POLL_IN", "CURL_POLL_OUT", "CURL_POLL_INOUT", "CURL_POLL_REMOVE" };
   elog(DEBUG2, "multi_socket_cb: received %s", whatstrs[what]);
 
@@ -171,6 +176,7 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, WorkerSta
     ereport(ERROR, errmsg("epoll_ctl failed for sockfd %d: %s", sockfd, strerror(e)));
   }
 
+  MemoryContextSwitchTo(old_ctx);
   return 0;
 }
 
