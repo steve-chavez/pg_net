@@ -38,7 +38,7 @@
 _Static_assert(LIBCURL_VERSION_NUM, "libcurl >= 7.83.0 is required"); // test for older libcurl versions that don't even have LIBCURL_VERSION_NUM defined (e.g. libcurl 6.5).
 _Static_assert(LIBCURL_VERSION_NUM >= MIN_LIBCURL_VERSION_NUM, "libcurl >= 7.83.0 is required");
 
-#define RECYCLE_MULTI_HANDLE_AT 5000
+#define RECYCLE_MULTI_HANDLE_AT 10000
 
 PG_MODULE_MAGIC;
 
@@ -608,55 +608,16 @@ void pg_net_worker(Datum main_arg) {
 
     } while (running_handles > 0); // run again while there are curl handles, this will prevent waiting for the latch_timeout (which will cause the cause the curl timeouts to be wrong)
 
-    if (ws.multi_handle_count >= RECYCLE_MULTI_HANDLE_AT) {
-      elog(LOG, "recycling curl multi handle at: %zu", ws.multi_handle_count);
-      curl_ret = curl_multi_cleanup(ws.curl_mhandle);
-      if(curl_ret != CURLM_OK)
-        ereport(ERROR, errmsg("curl_multi_cleanup: %s", curl_multi_strerror(curl_ret)));
-
-      curl_global_cleanup();
-
-      ares_library_cleanup();
-
-      ares_library_init_mem(ARES_LIB_INIT_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc);
-
-      /*curl_ret = curl_global_init(CURL_GLOBAL_ALL);*/
-      curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
-      if(curl_ret != CURLE_OK)
-        ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
-
-      ares_library_init_mem(ARES_LIB_INIT_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc);
-
-      ws.curl_mhandle = curl_multi_init();
-      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);
-      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETDATA, &ws);
-      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
-      curl_multi_setopt(ws.curl_mhandle, CURLMOPT_TIMERDATA, &ws);
-
-      ws.multi_handle_count = 0;
-    }
-
-    close(ws.epfd);
-    close(ws.timerfd);
-
-    ws.epfd = epoll_create1(0);
-    ws.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-
-    if (ws.epfd < 0) {
-      ereport(ERROR, errmsg("Failed to create epoll file descriptor"));
-    }
-
-    if (ws.timerfd < 0) {
-      ereport(ERROR, errmsg("Failed to create timerfd"));
-    }
-
-    timerfd_settime(ws.timerfd, 0, &(itimerspec){}, NULL);
-
-    epoll_ctl(ws.epfd, EPOLL_CTL_ADD, ws.timerfd, &(epoll_event){.events = EPOLLIN, .data.fd = ws.timerfd});
-
     MemoryContextResetAndDeleteChildren(CurlMemContext);
 
+    if (ws.multi_handle_count >= RECYCLE_MULTI_HANDLE_AT) {
+      elog(LOG, "restarting pg_net worker at multi_handle_count: %zu", ws.multi_handle_count);
+      break;
+    }
   }
+
+  close(ws.epfd);
+  close(ws.timerfd);
 
   curl_global_cleanup();
 
