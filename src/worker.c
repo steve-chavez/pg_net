@@ -22,6 +22,7 @@
 
 #include <curl/curl.h>
 #include <curl/multi.h>
+#include <ares.h>
 
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
@@ -501,9 +502,13 @@ void pg_net_worker(Datum main_arg) {
 
   elog(LOG, "pg_net_worker started with pid %d and config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.database_name=%s", MyProcPid, guc_ttl, guc_batch_size, guc_database_name);
 
-  /*int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);*/
+  ares_library_init_mem(ARES_LIB_INIT_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc);
 
-  int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
+  int curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
+
+  ares_library_init_mem(ARES_LIB_INIT_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc);
+
+  /*int curl_ret = curl_global_init(CURL_GLOBAL_ALL);*/
   if(curl_ret != CURLE_OK)
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
@@ -611,9 +616,16 @@ void pg_net_worker(Datum main_arg) {
 
       curl_global_cleanup();
 
-      curl_ret = curl_global_init(CURL_GLOBAL_ALL);
+      ares_library_cleanup();
+
+      ares_library_init_mem(ARES_LIB_INIT_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc);
+
+      /*curl_ret = curl_global_init(CURL_GLOBAL_ALL);*/
+      curl_ret = curl_global_init_mem(CURL_GLOBAL_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc, pstrdup, pg_net_curl_calloc);
       if(curl_ret != CURLE_OK)
         ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
+
+      ares_library_init_mem(ARES_LIB_INIT_ALL, pg_net_curl_malloc, pg_net_curl_free, pg_net_curl_realloc);
 
       ws.curl_mhandle = curl_multi_init();
       curl_multi_setopt(ws.curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);

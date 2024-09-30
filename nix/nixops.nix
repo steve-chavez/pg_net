@@ -105,7 +105,8 @@ in {
       enable = true;
       package = pkgs.postgresql_15.withPackages (p:
       let
-        ourCurl = pkgs.callPackage ./curl.nix {};
+        ourCares = pkgs.callPackage ./c-ares.nix {};
+        ourCurl = pkgs.callPackage ./curl.nix { c-aresMinimal = ourCares;};
       in
       [
         (pkgs.callPackage ./pg_net.nix { postgresql = pkgs.postgresql_15; curl = ourCurl; })
@@ -130,6 +131,9 @@ in {
     };
 
     environment.systemPackages = [
+      pkgs.bcc
+      pkgs.pgmetrics
+      pkgs.pg_activity
       pkgs.vegeta
       (
         pkgs.writeShellScriptBin "vegeta-bench" ''

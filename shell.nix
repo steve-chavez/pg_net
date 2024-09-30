@@ -6,7 +6,8 @@ with import (builtins.fetchTarball {
 mkShell {
   buildInputs =
     let
-      ourCurl = callPackage ./nix/curl.nix {};
+      ourCares = callPackage ./nix/c-ares.nix {};
+      ourCurl = callPackage ./nix/curl.nix { c-aresMinimal = ourCares;};
       pidFileName = "net_worker.pid";
       supportedPgVersions = [
         postgresql_12
@@ -33,6 +34,8 @@ mkShell {
       format.do format.doCheck
       nginxCustom.nginxScript
       gdbScript
+      bcc
+      ourCares
     ] ++ nixopsScripts;
   shellHook = ''
     export HISTFILE=.history
