@@ -20,7 +20,7 @@ let
 
     options="-F -c listen_addresses=\"\" -c log_min_messages=\"''${LOG_MIN_MESSAGES:-INFO}\" -k $PGDATA"
 
-    ext_options="-c shared_preload_libraries=\"pg_net\""
+    ext_options="-c shared_preload_libraries=\"pg_net, pg_stat_monitor\""
 
     pg_ctl start -o "$options" -o "$ext_options"
 

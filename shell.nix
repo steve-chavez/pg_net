@@ -8,13 +8,13 @@ mkShell {
     let
       pidFileName = "net_worker.pid";
       supportedPgVersions = [
-        postgresql_12
-        postgresql_13
-        postgresql_14
+        #postgresql_12
+        #postgresql_13
+        #postgresql_14
         postgresql_15
         postgresql_16
       ];
-      pgWithExt = { pg }: pg.withPackages (p: [ (callPackage ./nix/pg_net.nix { postgresql = pg;}) ]);
+      pgWithExt = { pg }: pg.withPackages (p: [ (callPackage ./nix/pg_net.nix { postgresql = pg;}) (callPackage ./nix/pg_stat_monitor.nix { postgresql = pg;}) ]);
       extAll = map (x: callPackage ./nix/pgScript.nix { postgresql = pgWithExt { pg = x;}; inherit pidFileName;}) supportedPgVersions;
       gdbScript = callPackage ./nix/gdbScript.nix {inherit pidFileName;};
       nginxCustom = callPackage ./nix/nginxCustom.nix {};
