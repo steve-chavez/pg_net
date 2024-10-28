@@ -1,9 +1,9 @@
-{ stdenv, postgresql, curl }:
+{ stdenv, postgresql, curl, libkqueue, pkg-config }:
 
 stdenv.mkDerivation {
   name = "pg_net";
 
-  buildInputs = [ postgresql curl ];
+  buildInputs = [ postgresql curl libkqueue pkg-config ];
 
   src = ../.;
 

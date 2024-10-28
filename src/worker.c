@@ -19,6 +19,7 @@
 #include <utils/jsonb.h>
 #include <utils/guc.h>
 #include <tcop/utility.h>
+#include <sys/event.h>
 
 #include <curl/curl.h>
 #include <curl/multi.h>

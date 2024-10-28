@@ -15,11 +15,11 @@ mkShell {
       };
       pidFileName = "net_worker.pid";
       supportedPgVersions = [
-        postgresql_12
-        postgresql_13
-        postgresql_14
-        postgresql_15
-        postgresql_16
+        #postgresql_12
+        #postgresql_13
+        #postgresql_14
+        #postgresql_15
+        #postgresql_16
         ourPg.postgresql_17
       ];
       pgWithExt = { pg }: pg.withPackages (p: [ (callPackage ./nix/pg_net.nix { postgresql = pg;}) ]);
