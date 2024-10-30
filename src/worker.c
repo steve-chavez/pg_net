@@ -163,11 +163,9 @@ void pg_net_worker(Datum main_arg) {
 
     int maxevents = guc_batch_size; // 1 extra for the timer
     struct kevent *events = palloc0(sizeof(epoll_event) * maxevents);
-    elog(LOG, "bla");
 
     do {
       int nfds = kevent(lstate.epfd, NULL, 0, events, maxevents, &(struct timespec){.tv_sec = 1});
-      elog(LOG, "nfds: %d", nfds);
       if (nfds < 0) {
         int save_errno = errno;
         elog(LOG, "kevent() returned: %s", strerror(save_errno));
@@ -187,8 +185,6 @@ void pg_net_worker(Datum main_arg) {
           events[i].filter & EVFILT_WRITE ? CURL_CSELECT_OUT:
           CURL_CSELECT_ERR;
 
-        elog(LOG, "ev_bitmask: %d", ev_bitmask);
-
         EREPORT_MULTI(
           curl_multi_socket_action(
             lstate.curl_mhandle,
@@ -199,8 +195,6 @@ void pg_net_worker(Datum main_arg) {
 
         insert_curl_responses(&lstate, CurlMemContext);
       }
-
-      elog(LOG, "running_handles: %d", running_handles);
     } while (running_handles > 0); // run again while there are curl handles, this will prevent waiting for the latch_timeout (which will cause the cause the curl timeouts to be wrong)
 
     pfree(events);
