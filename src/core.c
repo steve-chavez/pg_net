@@ -59,13 +59,9 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
   if (what == CURL_POLL_REMOVE){
     elog(LOG, "removing");
 
-    if (what & CURL_POLL_IN) {
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    }
+    EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
 
-    if (what & CURL_POLL_OUT) {
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    }
+    EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
 
     curl_multi_assign(lstate->curl_mhandle, sockfd, NULL);
     pfree(sock_info);
@@ -73,23 +69,29 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
     elog(LOG, "adding");
     sock_info = palloc(sizeof(SocketInfo));
     sock_info->sockfd = sockfd;
+    sock_info->action = what;
     curl_multi_assign(lstate->curl_mhandle, sockfd, sock_info);
     if (what & CURL_POLL_IN) {
+        elog(LOG, "adding CURL_POLL_IN");
         EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, sock_info);
     }
     if (what & CURL_POLL_OUT) {
+        elog(LOG, "adding CURL_POLL_OUT");
         EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, sock_info);
     }
   } else {
     elog(LOG, "modifying");
     if (what & CURL_POLL_IN) {
+        elog(LOG, "modifying CURL_POLL_IN");
         EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
     }
     if (what & CURL_POLL_OUT) {
+        elog(LOG, "modifying CURL_POLL_OUT");
         EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
     }
   }
 
+  elog(LOG, "kevent call");
   if (kevent(lstate->epfd, ev, n, NULL, 0, NULL) < 0) {
     int e = errno;
     ereport(ERROR, errmsg("kevent with %s failed for sockfd %d: %s", whatstrs[what], sockfd, strerror(e)));

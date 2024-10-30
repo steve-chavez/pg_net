@@ -13,6 +13,7 @@ typedef struct {
 typedef struct {
   curl_socket_t sockfd;
   int action;
+  //struct kevent *event;
 } SocketInfo ;
 
 void delete_expired_responses(char *ttl, int batch_size);
