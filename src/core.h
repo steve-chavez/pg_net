@@ -10,6 +10,11 @@ typedef struct {
   CURLM *curl_mhandle;
 } LoopState;
 
+typedef struct {
+  curl_socket_t sockfd;
+  int action;
+} SocketInfo ;
+
 void delete_expired_responses(char *ttl, int batch_size);
 
 void consume_request_queue(CURLM *curl_mhandle, int batch_size, MemoryContext curl_memctx);

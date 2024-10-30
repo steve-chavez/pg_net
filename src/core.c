@@ -19,6 +19,7 @@
 #include <utils/jsonb.h>
 #include <utils/guc.h>
 #include <tcop/utility.h>
+#include <sys/event.h>
 
 #include <curl/curl.h>
 #include <curl/multi.h>
@@ -51,35 +52,47 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
   static char *whatstrs[] = { "NONE", "CURL_POLL_IN", "CURL_POLL_OUT", "CURL_POLL_INOUT", "CURL_POLL_REMOVE" };
   elog(DEBUG2, "multi_socket_cb: sockfd %d received %s", sockfd, whatstrs[what]);
 
-  int epoll_op;
-  if(!socketp){
-    epoll_op = EPOLL_CTL_ADD;
-    bool *socket_exists = palloc(sizeof(bool));
-    curl_multi_assign(lstate->curl_mhandle, sockfd, socket_exists);
-  } else if (what == CURL_POLL_REMOVE){
-    epoll_op = EPOLL_CTL_DEL;
-    pfree(socketp);
+  SocketInfo *sock_info = (SocketInfo *)socketp;
+  struct kevent ev[2];
+  int n = 0;
+
+  if (what == CURL_POLL_REMOVE){
+    elog(LOG, "removing");
+
+    if (what & CURL_POLL_IN) {
+        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    }
+
+    if (what & CURL_POLL_OUT) {
+        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    }
+
     curl_multi_assign(lstate->curl_mhandle, sockfd, NULL);
+    pfree(sock_info);
+  } else if(!sock_info){
+    elog(LOG, "adding");
+    sock_info = palloc(sizeof(SocketInfo));
+    sock_info->sockfd = sockfd;
+    curl_multi_assign(lstate->curl_mhandle, sockfd, sock_info);
+    if (what & CURL_POLL_IN) {
+        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, sock_info);
+    }
+    if (what & CURL_POLL_OUT) {
+        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, sock_info);
+    }
   } else {
-    epoll_op = EPOLL_CTL_MOD;
+    elog(LOG, "modifying");
+    if (what & CURL_POLL_IN) {
+        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    }
+    if (what & CURL_POLL_OUT) {
+        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    }
   }
 
-  epoll_event ev = {
-    .data.fd = sockfd,
-    .events =
-      (what & CURL_POLL_IN) ?
-      EPOLLIN:
-      (what & CURL_POLL_OUT) ?
-      EPOLLOUT:
-      0, // no event is assigned since here we get CURL_POLL_REMOVE and the sockfd will be removed
-  };
-
-  // epoll_ctl will copy ev, so there's no need to do palloc for the epoll_event
-  // https://github.com/torvalds/linux/blob/e32cde8d2bd7d251a8f9b434143977ddf13dcec6/fs/eventpoll.c#L2408-L2418
-  if (epoll_ctl(lstate->epfd, epoll_op, sockfd, &ev) < 0) {
+  if (kevent(lstate->epfd, ev, n, NULL, 0, NULL) < 0) {
     int e = errno;
-    static char *opstrs[] = { "NONE", "EPOLL_CTL_ADD", "EPOLL_CTL_DEL", "EPOLL_CTL_MOD" };
-    ereport(ERROR, errmsg("epoll_ctl with %s failed when receiving %s for sockfd %d: %s", whatstrs[what], opstrs[epoll_op], sockfd, strerror(e)));
+    ereport(ERROR, errmsg("kevent with %s failed for sockfd %d: %s", whatstrs[what], sockfd, strerror(e)));
   }
 
   return 0;

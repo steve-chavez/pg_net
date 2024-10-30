@@ -20,6 +20,8 @@
 #include <utils/guc.h>
 #include <tcop/utility.h>
 #include <sys/event.h>
+#include <sys/time.h>
+#include <sys/types.h>
 
 #include <curl/curl.h>
 #include <curl/multi.h>
@@ -111,7 +113,7 @@ void pg_net_worker(Datum main_arg) {
     ereport(ERROR, errmsg("curl_global_init() returned %s\n", curl_easy_strerror(curl_ret)));
 
   LoopState lstate = {
-    .epfd = epoll_create1(0),
+    .epfd = kqueue(),
     .curl_mhandle = curl_multi_init(),
   };
 
@@ -154,16 +156,20 @@ void pg_net_worker(Datum main_arg) {
     consume_request_queue(lstate.curl_mhandle, guc_batch_size, CurlMemContext);
 
     int running_handles = 0;
-    epoll_event *events = palloc0(sizeof(epoll_event) * guc_batch_size);
 
     EREPORT_MULTI(
       curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
     );
 
+    int maxevents = guc_batch_size + 1; // 1 extra for the timer
+    struct kevent *events = palloc0(sizeof(epoll_event) * maxevents);
+
     do {
-      int nfds = epoll_wait(lstate.epfd, events, guc_batch_size, /*timeout=*/0);
+      int nfds = kevent(lstate.epfd, NULL, 0, events, maxevents, &(struct timespec){.tv_sec = 1});
+      elog(LOG, "nfds: %d", nfds);
       if (nfds < 0) {
         int save_errno = errno;
+        elog(LOG, "kevent() returned: %s", strerror(save_errno));
         if(save_errno == EINTR) { // can happen when the epoll is interrupted, for example when running under GDB. Just continue in this case.
           continue;
         }
@@ -174,14 +180,16 @@ void pg_net_worker(Datum main_arg) {
       }
 
       for (int i = 0; i < nfds; i++) {
+        SocketInfo *sock_info = (SocketInfo *) events[i].udata;
         int ev_bitmask =
-          events[i].events & EPOLLIN ? CURL_CSELECT_IN:
-          events[i].events & EPOLLOUT ? CURL_CSELECT_OUT:
+          events[i].filter == EVFILT_READ ? CURL_CSELECT_IN:
+          events[i].filter == EVFILT_WRITE ? CURL_CSELECT_OUT:
           CURL_CSELECT_ERR;
 
         EREPORT_MULTI(
           curl_multi_socket_action(
-            lstate.curl_mhandle, events[i].data.fd,
+            lstate.curl_mhandle,
+            sock_info->sockfd,
             ev_bitmask,
             &running_handles)
         );
