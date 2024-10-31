@@ -24,7 +24,6 @@
 #include <curl/curl.h>
 #include <curl/multi.h>
 
-#include <sys/epoll.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -57,7 +56,6 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
   int  count = 0;
 
   if (what == CURL_POLL_REMOVE) {
-    elog(LOG, "Deleting");
     if (sock_info->action & CURL_POLL_IN)
       EV_SET(&ev[count++], sockfd, EVFILT_READ, EV_DELETE, 0, 0, sock_info);
 
@@ -68,7 +66,6 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
     pfree(sock_info);
   } else {
     if (!sock_info) {
-      elog(LOG, "New");
       sock_info = palloc(sizeof(SocketInfo));
       sock_info->sockfd = sockfd;
       sock_info->action = what;
@@ -86,8 +83,7 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
 
   if (kevent(lstate->epfd, &ev[0], count, NULL, 0, NULL) < 0) {
     int save_errno = errno;
-    if(save_errno != 0)
-      ereport(ERROR, errmsg("kevent with %s failed for sockfd %d: %s", whatstrs[what], sockfd, strerror(save_errno)));
+    ereport(ERROR, errmsg("kevent with %s failed for sockfd %d: %s", whatstrs[what], sockfd, strerror(save_errno)));
   }
 
   return 0;

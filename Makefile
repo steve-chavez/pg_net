@@ -1,7 +1,15 @@
-LIBKQUEUE_CFLAGS=`pkg-config --cflags libkqueue`
-LIBKQUEUE_LIBS=`pkg-config --libs libkqueue`
+UNAME_S=$(shell uname -s)
 
-PG_CFLAGS = -std=c11 -Werror -Wno-declaration-after-statement $(LIBKQUEUE_CFLAGS)
+ifeq ($(UNAME_S),Linux)
+  KQUEUE_CFLAGS=`pkg-config --cflags libkqueue`
+  KQUEUE_LIBS=`pkg-config --libs libkqueue`
+endif
+ifeq ($(UNAME_S),Darwin)
+  KQUEUE_CFLAGS=
+  KQUEUE_LIBS=
+endif
+
+PG_CFLAGS = -std=c11 -Werror -Wno-declaration-after-statement $(KQUEUE_CFLAGS)
 EXTENSION = pg_net
 EXTVERSION = 0.12.0
 
@@ -25,7 +33,7 @@ $(EXTENSION).control:
 EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql $(EXTENSION).control
 
 PG_CONFIG = pg_config
-SHLIB_LINK = -lcurl $(LIBKQUEUE_LIBS)
+SHLIB_LINK = -lcurl $(KQUEUE_LIBS)
 
 # Find <curl/curl.h> from system headers
 PG_CPPFLAGS := $(CPPFLAGS) -DEXTVERSION=\"$(EXTVERSION)\"

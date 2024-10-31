@@ -26,7 +26,6 @@
 #include <curl/curl.h>
 #include <curl/multi.h>
 
-#include <sys/epoll.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -158,7 +157,7 @@ void pg_net_worker(Datum main_arg) {
     int running_handles = 0;
 
     int maxevents = guc_batch_size; // 1 extra for the timer
-    struct kevent *events = palloc0(sizeof(epoll_event) * maxevents);
+    struct kevent *events = palloc0(sizeof(struct kevent) * maxevents);
 
     EREPORT_MULTI(
       curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
