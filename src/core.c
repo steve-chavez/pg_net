@@ -79,19 +79,19 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
    * old event mask to the new event mask, since kevent treats readable
    * and writable as separate events.
    */
-  if (old_events & CURL_POLL_IN){
+  if (old_events & (CURL_POLL_IN | CURL_POLL_INOUT)){
     elog(LOG, "old_events & CURL_POLL_IN");
     old_filt_read = true;
   }
-  if (what & CURL_POLL_IN){
+  if (what & (CURL_POLL_IN | CURL_POLL_INOUT)){
     elog(LOG, "what & CURL_POLL_IN");
     new_filt_read = true;
   }
-  if (old_events & CURL_POLL_OUT){
+  if (old_events & (CURL_POLL_OUT | CURL_POLL_INOUT)){
     elog(LOG, "old_events & CURL_POLL_OUT");
     old_filt_write = true;
   }
-  if (what & CURL_POLL_OUT){
+  if (what & (CURL_POLL_OUT | CURL_POLL_INOUT)){
     elog(LOG, "what & CURL_POLL_OUT");
     new_filt_write = true;
   }
