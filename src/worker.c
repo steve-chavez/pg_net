@@ -157,19 +157,18 @@ void pg_net_worker(Datum main_arg) {
 
     int running_handles = 0;
 
+    int maxevents = guc_batch_size; // 1 extra for the timer
+    struct kevent *events = palloc0(sizeof(epoll_event) * maxevents);
+
     EREPORT_MULTI(
       curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
     );
-
-    int maxevents = guc_batch_size; // 1 extra for the timer
-    struct kevent *events = palloc0(sizeof(epoll_event) * maxevents);
 
     do {
       int nfds = kevent(lstate.epfd, NULL, 0, events, maxevents, &(struct timespec){.tv_sec = 1});
       if (nfds < 0) {
         int save_errno = errno;
-        elog(LOG, "kevent() returned: %s", strerror(save_errno));
-        if(save_errno == EINTR) { // can happen when the epoll is interrupted, for example when running under GDB. Just continue in this case.
+        if(save_errno == EINTR) { // can happen when the wait is interrupted, for example when running under GDB. Just continue in this case.
           continue;
         }
         else {
@@ -180,10 +179,14 @@ void pg_net_worker(Datum main_arg) {
 
       for (int i = 0; i < nfds; i++) {
         SocketInfo *sock_info = (SocketInfo *) events[i].udata;
-        int ev_bitmask =
-          events[i].filter & EVFILT_READ ? CURL_CSELECT_IN:
-          events[i].filter & EVFILT_WRITE ? CURL_CSELECT_OUT:
-          CURL_CSELECT_ERR;
+        int ev_bitmask = 0;
+
+        if (events[i].filter == EVFILT_READ)
+          ev_bitmask |= CURL_CSELECT_IN;
+        else if (events[i].filter == EVFILT_WRITE)
+          ev_bitmask |= CURL_CSELECT_OUT;
+        else
+          ev_bitmask = CURL_CSELECT_ERR;
 
         EREPORT_MULTI(
           curl_multi_socket_action(
