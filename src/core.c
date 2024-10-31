@@ -54,55 +54,74 @@ static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState
 
   SocketInfo *sock_info = (SocketInfo *)socketp;
   struct kevent ev[2];
-  int n = 0;
+  int  count = 0;
+  int  old_events = 0;
+  bool new_filt_read = false;
+  bool old_filt_read = false;
+  bool new_filt_write = false;
+  bool old_filt_write = false;
 
-  /*
-   *int action =
-   *  (what & CURL_POLL_IN) ?
-   *  EVFILT_READ:
-   *  (what & CURL_POLL_OUT) ?
-   *  EVFILT_WRITE:
-   *  0; // no event is assigned since here we get CURL_POLL_REMOVE and the sockfd will be removed
-   */
-
-  if (what == CURL_POLL_REMOVE){
-    if (sock_info->action & CURL_POLL_IN) {
-        elog(LOG, "removing CURL_POLL_IN");
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_DELETE, 0, 0, sock_info);
-    }
-
-    if (sock_info->action & CURL_POLL_OUT) {
-        elog(LOG, "removing CURL_POLL_OUT");
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_DELETE, 0, 0, sock_info);
-    }
-
+  if (what == CURL_POLL_REMOVE) {
+    old_events = sock_info->action;
     curl_multi_assign(lstate->curl_mhandle, sockfd, NULL);
     pfree(sock_info);
-  } else if(!sock_info){
+  } else if (!sock_info) {
     sock_info = palloc(sizeof(SocketInfo));
     sock_info->sockfd = sockfd;
     sock_info->action = what;
     curl_multi_assign(lstate->curl_mhandle, sockfd, sock_info);
-    if (what & CURL_POLL_IN) {
-        elog(LOG, "adding CURL_POLL_IN");
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, sock_info);
-    }
-    if (what & CURL_POLL_OUT) {
-        elog(LOG, "adding CURL_POLL_OUT");
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, sock_info);
-    }
   } else {
-    if (what & CURL_POLL_IN) {
-        elog(LOG, "modifying CURL_POLL_IN");
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-    }
-    if (what & CURL_POLL_OUT) {
-        elog(LOG, "modifying CURL_POLL_OUT");
-        EV_SET(&ev[n++], sock_info->sockfd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
-    }
+    old_events = sock_info->action;
   }
 
-  if (kevent(lstate->epfd, ev, n, NULL, 0, NULL) < 0) {
+  /*
+   * We need to compute the adds and deletes required to get from the
+   * old event mask to the new event mask, since kevent treats readable
+   * and writable as separate events.
+   */
+  if (old_events & CURL_POLL_IN){
+    elog(LOG, "old_events & CURL_POLL_IN");
+    old_filt_read = true;
+  }
+  if (what & CURL_POLL_IN){
+    elog(LOG, "what & CURL_POLL_IN");
+    new_filt_read = true;
+  }
+  if (old_events & CURL_POLL_OUT){
+    elog(LOG, "old_events & CURL_POLL_OUT");
+    old_filt_write = true;
+  }
+  if (what & CURL_POLL_OUT){
+    elog(LOG, "what & CURL_POLL_OUT");
+    new_filt_write = true;
+  }
+
+  if (old_events == what)
+    return 0;
+
+  if (old_filt_read && !new_filt_read){
+    elog(LOG, "old_filt_read && !new_filt_read");
+    EV_SET(&ev[count++], sockfd, EVFILT_READ, EV_DELETE, 0, 0, sock_info);
+  } else if (!old_filt_read && new_filt_read) {
+    elog(LOG, "!old_filt_read && new_filt_read");
+    EV_SET(&ev[count++], sockfd, EVFILT_READ, EV_ADD, 0, 0, sock_info);
+  }
+
+  if (old_filt_write && !new_filt_write) {
+    elog(LOG, "old_filt_write && !new_filt_write");
+    EV_SET(&ev[count++], sockfd, EVFILT_WRITE, EV_DELETE, 0, 0, sock_info);
+  }
+  else if (!old_filt_write && new_filt_write) {
+    elog(LOG, "!old_filt_write && new_filt_write");
+    EV_SET(&ev[count++], sockfd, EVFILT_WRITE, EV_ADD, 0, 0, sock_info);
+  }
+
+  if (count == 0)
+    return 0;
+
+  Assert(count <= 2);
+
+  if (kevent(lstate->epfd, &ev[0], count, NULL, 0, NULL) < 0) {
     int e = errno;
     ereport(ERROR, errmsg("kevent with %s failed for sockfd %d: %s", whatstrs[what], sockfd, strerror(e)));
   }
