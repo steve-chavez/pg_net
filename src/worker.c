@@ -159,10 +159,6 @@ void pg_net_worker(Datum main_arg) {
     int maxevents = guc_batch_size; // 1 extra for the timer
     struct kevent *events = palloc0(sizeof(struct kevent) * maxevents);
 
-    EREPORT_MULTI(
-      curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
-    );
-
     do {
       int nfds = kevent(lstate.epfd, NULL, 0, events, maxevents, &(struct timespec){.tv_sec = 1});
       if (nfds < 0) {
@@ -180,10 +176,12 @@ void pg_net_worker(Datum main_arg) {
         SocketInfo *sock_info = (SocketInfo *) events[i].udata;
         int ev_bitmask = 0;
 
-        if (events[i].filter == EVFILT_TIMER)
+        if (events[i].filter == EVFILT_TIMER){
+          elog(LOG, "what");
           EREPORT_MULTI(
             curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
           );
+        }
         else if (events[i].filter == EVFILT_READ)
           ev_bitmask |= CURL_CSELECT_IN;
         else if (events[i].filter == EVFILT_WRITE)

@@ -47,6 +47,35 @@ body_cb(void *contents, size_t size, size_t nmemb, void *userp)
   return realsize;
 }
 
+static int multi_timer_cb(CURLM *multi, long timeout_ms, LoopState *lstate) {
+  elog(DEBUG2, "multi_timer_cb: Setting timeout to %ld ms\n", timeout_ms);
+  static struct kevent timer_event;
+  static bool timer_added = false;
+
+  if (timeout_ms > 0) {
+    EV_SET(&timer_event, 1, EVFILT_TIMER, EV_ADD, NOTE_MSECONDS, timeout_ms, NULL);
+    timer_added = true;
+  } else if (timeout_ms == 0){
+    /* libcurl wants us to timeout now, however setting both fields of
+     * new_value.it_value to zero disarms the timer. The closest we can
+     * do is to schedule the timer to fire in 1 ns. */
+    EV_SET(&timer_event, 1, EVFILT_TIMER, EV_ADD, NOTE_NSECONDS, 1, NULL);
+    timer_added = true;
+  }
+    if (timer_added){
+    // libcurl passes a -1 to indicate the timer should be deleted
+    EV_SET(&timer_event, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+    timer_added = false;
+  }
+
+  if (kevent(lstate->epfd, &timer_event, 1, NULL, 0, NULL) < 0) {
+    int save_errno = errno;
+    ereport(ERROR, errmsg("kevent with EVFILT_TIMER failed: %s", strerror(save_errno)));
+  }
+
+  return 0;
+}
+
 static int multi_socket_cb(CURL *easy, curl_socket_t sockfd, int what, LoopState *lstate, void *socketp) {
   static char *whatstrs[] = { "NONE", "CURL_POLL_IN", "CURL_POLL_OUT", "CURL_POLL_INOUT", "CURL_POLL_REMOVE" };
   elog(DEBUG2, "multi_socket_cb: sockfd %d received %s", sockfd, whatstrs[what]);
@@ -168,6 +197,8 @@ static void init_curl_handle(CURLM *curl_mhandle, MemoryContext curl_memctx, int
 void set_curl_mhandle(CURLM *curl_mhandle, LoopState *lstate){
   CURL_MULTI_SETOPT(curl_mhandle, CURLMOPT_SOCKETFUNCTION, multi_socket_cb);
   CURL_MULTI_SETOPT(curl_mhandle, CURLMOPT_SOCKETDATA, lstate);
+  CURL_MULTI_SETOPT(curl_mhandle, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
+  CURL_MULTI_SETOPT(curl_mhandle, CURLMOPT_TIMERDATA, lstate);
 }
 
 void delete_expired_responses(char *ttl, int batch_size){
