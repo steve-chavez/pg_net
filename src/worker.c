@@ -180,7 +180,11 @@ void pg_net_worker(Datum main_arg) {
         SocketInfo *sock_info = (SocketInfo *) events[i].udata;
         int ev_bitmask = 0;
 
-        if (events[i].filter == EVFILT_READ)
+        if (events[i].filter == EVFILT_TIMER)
+          EREPORT_MULTI(
+            curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
+          );
+        else if (events[i].filter == EVFILT_READ)
           ev_bitmask |= CURL_CSELECT_IN;
         else if (events[i].filter == EVFILT_WRITE)
           ev_bitmask |= CURL_CSELECT_OUT;
