@@ -156,7 +156,7 @@ void pg_net_worker(Datum main_arg) {
 
     int running_handles = 0;
 
-    int maxevents = guc_batch_size; // 1 extra for the timer
+    int maxevents = guc_batch_size + 1; // 1 extra for the timer
     struct kevent *events = palloc0(sizeof(struct kevent) * maxevents);
 
     do {
@@ -177,25 +177,25 @@ void pg_net_worker(Datum main_arg) {
         int ev_bitmask = 0;
 
         if (events[i].filter == EVFILT_TIMER){
-          elog(LOG, "what");
           EREPORT_MULTI(
             curl_multi_socket_action(lstate.curl_mhandle, CURL_SOCKET_TIMEOUT, 0, &running_handles)
           );
-        }
-        else if (events[i].filter == EVFILT_READ)
-          ev_bitmask |= CURL_CSELECT_IN;
-        else if (events[i].filter == EVFILT_WRITE)
-          ev_bitmask |= CURL_CSELECT_OUT;
-        else
-          ev_bitmask = CURL_CSELECT_ERR;
+        } else {
+          if (events[i].filter == EVFILT_READ)
+            ev_bitmask |= CURL_CSELECT_IN;
+          else if (events[i].filter == EVFILT_WRITE)
+            ev_bitmask |= CURL_CSELECT_OUT;
+          else
+            ev_bitmask = CURL_CSELECT_ERR;
 
-        EREPORT_MULTI(
-          curl_multi_socket_action(
-            lstate.curl_mhandle,
-            sock_info->sockfd,
-            ev_bitmask,
-            &running_handles)
-        );
+          EREPORT_MULTI(
+            curl_multi_socket_action(
+              lstate.curl_mhandle,
+              sock_info->sockfd,
+              ev_bitmask,
+              &running_handles)
+          );
+        }
 
         insert_curl_responses(&lstate, CurlMemContext);
       }

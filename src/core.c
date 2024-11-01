@@ -49,23 +49,19 @@ body_cb(void *contents, size_t size, size_t nmemb, void *userp)
 
 static int multi_timer_cb(CURLM *multi, long timeout_ms, LoopState *lstate) {
   elog(DEBUG2, "multi_timer_cb: Setting timeout to %ld ms\n", timeout_ms);
-  static struct kevent timer_event;
-  static bool timer_added = false;
+  struct kevent timer_event;
+  int id = 1;
 
   if (timeout_ms > 0) {
-    EV_SET(&timer_event, 1, EVFILT_TIMER, EV_ADD, NOTE_MSECONDS, timeout_ms, NULL);
-    timer_added = true;
+    EV_SET(&timer_event, id, EVFILT_TIMER, EV_ADD, 0, timeout_ms, NULL); //milliseconds by default
   } else if (timeout_ms == 0){
     /* libcurl wants us to timeout now, however setting both fields of
      * new_value.it_value to zero disarms the timer. The closest we can
      * do is to schedule the timer to fire in 1 ns. */
-    EV_SET(&timer_event, 1, EVFILT_TIMER, EV_ADD, NOTE_NSECONDS, 1, NULL);
-    timer_added = true;
-  }
-    if (timer_added){
+    EV_SET(&timer_event, id, EVFILT_TIMER, EV_ADD, NOTE_NSECONDS, 1, NULL);
+  } else {
     // libcurl passes a -1 to indicate the timer should be deleted
-    EV_SET(&timer_event, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
-    timer_added = false;
+    EV_SET(&timer_event, id, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
   }
 
   if (kevent(lstate->epfd, &timer_event, 1, NULL, 0, NULL) < 0) {
