@@ -17,14 +17,6 @@ mkShell {
       ];
       format = callPackage ./nix/format.nix {};
       nxpg = callPackage ./nix/nxpg.nix {inherit pidFileName;};
-      blo = ((callPackage ./nix/checked-shell-script.nix {})
-          {
-            name = "blo";
-            docs = "Run the memory tests.";
-          }
-          ''
-            ls
-          '').bin;
     in
     [
       pythonDeps
@@ -34,7 +26,7 @@ mkShell {
     ] ++
     nixopsScripts ++
     lib.optional stdenv.isLinux [gdbScript] ++
-    nxpg ++ [blo];
+    nxpg;
   shellHook = ''
     export HISTFILE=.history
   '';
