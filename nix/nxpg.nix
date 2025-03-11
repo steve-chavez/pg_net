@@ -23,7 +23,7 @@ let
         args = [
           "ARG_POSITIONAL_SINGLE([operation], [Operation])"
           "ARG_TYPE_GROUP_SET([OPERATION], [OPERATION], [operation], [build,test,coverage, psql])"
-          "ARG_OPTIONAL_SINGLE([version], [v], [Version], [17])"
+          "ARG_OPTIONAL_SINGLE([version], [v], [PostgreSQL version], [17])"
           "ARG_TYPE_GROUP_SET([VERSION], [VERSION], [version], [17,16,15,14,13,12])"
           "ARG_LEFTOVERS([psql arguments])"
         ];
