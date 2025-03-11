@@ -1,3 +1,4 @@
+SRC_DIR = src
 BUILD_DIR ?= build
 
 # the `-Wno`s quiet C90 warnings
@@ -21,8 +22,8 @@ REGRESS = $(patsubst test/sql/%.sql,%,$(TESTS))
 REGRESS_OPTS = --use-existing --inputdir=test
 
 MODULE_big = $(EXTENSION)
-SRC = $(wildcard src/*.c)
-OBJS = $(patsubst src/%.c, src/%.o, $(SRC))
+SRC = $(wildcard $(SRC_DIR)/*.c)
+OBJS = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC))
 
 PG_CONFIG = pg_config
 SHLIB_LINK = -lcurl
@@ -38,11 +39,16 @@ $(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 $(EXTENSION).control:
 	sed "s/@PG_NET_VERSION@/$(EXTVERSION)/g" $(EXTENSION).control.in > $(EXTENSION).control
 
-build: $(BUILD_DIR)/$(EXTENSION).so
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(EXTENSION).so: $(EXTENSION).so
 	mkdir -p $(BUILD_DIR)
 	mv $? $@
 
+build: $(BUILD_DIR)/$(EXTENSION).so
+
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+

@@ -30,6 +30,7 @@ let
       }
       ''
       export PGVER="$_arg_version"
+      export BUILD_DIR="build-$PGVER"
 
       case "$_arg_version" in
         17)
@@ -66,8 +67,8 @@ let
 
         # pg versions older than 16 don't support adding "-c" to initdb to add these options
         # so we just modify the resulting postgresql.conf to avoid an error
-        echo "dynamic_library_path='\$libdir:$(pwd)'" >> "$PGDATA"/postgresql.conf
-        echo "extension_control_path='\$system:$(pwd)'" >> "$PGDATA"/postgresql.conf
+        echo "dynamic_library_path='\$libdir:$(pwd)/$BUILD_DIR'" >> "$PGDATA"/postgresql.conf
+        echo "extension_control_path='\$system:$(pwd)/$BUILD_DIR'" >> "$PGDATA"/postgresql.conf
 
         options="-F -c listen_addresses=\"\" -c log_min_messages=\"''${LOG_MIN_MESSAGES:-INFO}\" -k $PGDATA"
 
@@ -90,13 +91,10 @@ let
 
       case "$_arg_operation" in
         build)
-          #make clean
-          BUILD_DIR="build-$PGVER" make build
+          BUILD_DIR="$BUILD_DIR" make build
           ;;
 
         test)
-          make clean
-          make
           ${python3}/bin/python -m pytest -vv
           ;;
 
