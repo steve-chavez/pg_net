@@ -31,23 +31,20 @@ SHLIB_LINK = -lcurl
 # Find <curl/curl.h> from system headers
 PG_CPPFLAGS := $(CPPFLAGS) -DEXTVERSION=\"$(EXTVERSION)\"
 
-all: $(EXTENSION)--$(EXTVERSION).sql $(EXTENSION).control
-
-$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
-	cp $< $@
-
-$(EXTENSION).control:
-	sed "s/@PG_NET_VERSION@/$(EXTVERSION)/g" $(EXTENSION).control.in > $(EXTENSION).control
+build: $(BUILD_DIR)/$(EXTENSION).so $(BUILD_DIR)/$(EXTENSION)--$(EXTVERSION).sql $(BUILD_DIR)/$(EXTENSION).control
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/$(EXTENSION).so: $(EXTENSION).so
-	mkdir -p $(BUILD_DIR)
-	mv $? $@
+$(BUILD_DIR)/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
+	cp $< $@
 
-build: $(BUILD_DIR)/$(EXTENSION).so
+$(BUILD_DIR)/$(EXTENSION).control:
+	sed "s/@PG_NET_VERSION@/$(EXTVERSION)/g" $(EXTENSION).control.in > $@
+
+$(BUILD_DIR)/$(EXTENSION).so: $(EXTENSION).so
+	mv $? $@
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
