@@ -63,6 +63,7 @@ let
           ;;
       esac
 
+      # all commands except build require a temp db
       if [ build != "$_arg_operation" ]; then
         tmpdir="$(mktemp -d)"
 
@@ -105,7 +106,7 @@ let
           ;;
 
         test)
-          ${python3}/bin/python -m pytest -vv
+          ${python3}/bin/python -m pytest -vv "''${_arg_leftovers[@]}"
           ;;
 
         coverage)
@@ -122,7 +123,7 @@ let
           ${lcov}/bin/lcov --list coverage.info
           ${lcov}/bin/genhtml "$info_file" --output-directory "$out_dir"
 
-          echo "${prefix}-coverage: To see the results, visit file://$(pwd)/$out_dir/index.html on your browser"
+          echo -e "\nTo see the results, visit file://$(pwd)/$out_dir/index.html on your browser\n"
           ;;
 
         psql)
