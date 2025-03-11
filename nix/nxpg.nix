@@ -29,9 +29,6 @@ let
         ];
       }
       ''
-      export PGVER="$_arg_version"
-      export BUILD_DIR="build-$PGVER"
-
       case "$_arg_version" in
         17)
           export PATH=${ourPg.postgresql_17}/bin:"$PATH"
@@ -50,6 +47,19 @@ let
           ;;
         12)
           export PATH=${ourPg.postgresql_12}/bin:"$PATH"
+          ;;
+      esac
+
+      export BUILD_DIR="build-$_arg_version"
+
+      # all commands need the build ready
+      case "$_arg_operation" in
+        coverage)
+          make COVERAGE=1
+          ;;
+
+        *)
+          make
           ;;
       esac
 
@@ -91,7 +101,7 @@ let
 
       case "$_arg_operation" in
         build)
-          BUILD_DIR="$BUILD_DIR" make build
+          # do nothing here as the build already ran
           ;;
 
         test)
@@ -99,8 +109,6 @@ let
           ;;
 
         coverage)
-          make clean
-          make COVERAGE=1
           info_file="coverage.info"
           out_dir="coverage_html"
 
