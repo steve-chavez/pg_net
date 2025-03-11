@@ -23,12 +23,14 @@ let
         args = [
           "ARG_POSITIONAL_SINGLE([operation], [Operation])"
           "ARG_TYPE_GROUP_SET([OPERATION], [OPERATION], [operation], [build,test,coverage, psql])"
-          "ARG_OPTIONAL_SINGLE([version], , [Version], [17])"
+          "ARG_OPTIONAL_SINGLE([version], [v], [Version], [17])"
           "ARG_TYPE_GROUP_SET([VERSION], [VERSION], [version], [17,16,15,14,13,12])"
           "ARG_LEFTOVERS([psql arguments])"
         ];
       }
       ''
+      export PGVER="$_arg_version"
+
       case "$_arg_version" in
         17)
           export PATH=${ourPg.postgresql_17}/bin:"$PATH"
@@ -88,8 +90,8 @@ let
 
       case "$_arg_operation" in
         build)
-          make clean
-          make
+          #make clean
+          BUILD_DIR="build-$PGVER" make build
           ;;
 
         test)

@@ -1,3 +1,5 @@
+BUILD_DIR ?= build
+
 # the `-Wno`s quiet C90 warnings
 PG_CFLAGS = -std=c11 -Wextra -Wall -Werror \
 	-Wno-declaration-after-statement \
@@ -35,6 +37,12 @@ $(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 
 $(EXTENSION).control:
 	sed "s/@PG_NET_VERSION@/$(EXTVERSION)/g" $(EXTENSION).control.in > $(EXTENSION).control
+
+build: $(BUILD_DIR)/$(EXTENSION).so
+
+$(BUILD_DIR)/$(EXTENSION).so: $(EXTENSION).so
+	mkdir -p $(BUILD_DIR)
+	mv $? $@
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
