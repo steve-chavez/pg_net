@@ -18,6 +18,25 @@ let
   ];
   blo =
     let
+      makefileContents = builtins.readFile ../Makefile;
+
+      # Replace possible Windows carriage returns and split into lines
+      lines = lib.splitString "\n"
+        (builtins.replaceStrings [ "\r" ] [ "" ] makefileContents);
+
+      # Filter lines that match regex
+      matchingLines = builtins.filter (line: builtins.match "^EXTENSION *= *(.*)$" line != null) lines;
+
+      # If we found any matches, extract from the first; else "UNKNOWN"
+      extensionName =
+        if builtins.length matchingLines == 0 then
+          "UNKNOWN"
+        else
+          let
+            tokens = builtins.match "^EXTENSION *= *(.*)$" (builtins.head matchingLines);
+          in
+            builtins.elemAt tokens 0;
+
       gdbConf = writeText "gdbconf" ''
         # Do this so we can do `backtrace` once a segfault occurs. Otherwise once SIGSEGV is received the bgworker will quit and we can't backtrace.
         handle SIGSEGV stop nopass
@@ -107,7 +126,7 @@ let
       pg_ctl start -o "$options" -o "$ext_options"
 
       # save pid for future gdb invocation
-      psql -t -c "\o $pid_file_name" -c "select pid from pg_stat_activity where backend_type ilike '%pg_net%'"
+      psql -t -c "\o $pid_file_name" -c "select pid from pg_stat_activity where backend_type ilike '%${extensionName}%'"
       ${gnused}/bin/sed '/^''$/d;s/[[:blank:]]//g' -i "$pid_file_name"
     fi
 
@@ -149,6 +168,10 @@ let
         fi
 
         pid=$(cat "$pid_file_name")
+        if [ -z "$pid" ]; then
+          echo "There's no background worker found for extension ${extensionName}"
+          exit 1
+        fi
         ${gdb}/bin/gdb -x ${gdbConf} -p "$pid" "''${_arg_leftovers[@]}"
         ;;
 
