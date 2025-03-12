@@ -1,4 +1,4 @@
-{ stdenv, lib, makeWrapper, fetchurl, writeShellScriptBin, findutils, entr, callPackage, lcov, pidFileName, gnused, python3, gdb, writeText} :
+{ stdenv, lib, makeWrapper, fetchurl, writeShellScriptBin, findutils, entr, callPackage, lcov, pidFileName, gnused, gdb, writeText} :
 let
   prefix = "nxpg";
   ourPg = callPackage ./postgresql {
@@ -138,14 +138,14 @@ let
         ;;
 
       test)
-        ${python3}/bin/python -m pytest -vv "''${_arg_leftovers[@]}"
+        make test
         ;;
 
       coverage)
         info_file="coverage.info"
         out_dir="coverage_html"
 
-        ${python3}/bin/python -m pytest -vv
+        make test
 
         ${lcov}/bin/lcov --capture --directory . --output-file "$info_file"
 

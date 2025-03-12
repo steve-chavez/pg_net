@@ -56,3 +56,7 @@ on-tmp-start:
 	psql -v ON_ERROR_STOP=1 -c "create role pre_existing nosuperuser login" -d postgres
 	psql -v ON_ERROR_STOP=1 -c "create extension pg_net" -d postgres
 	psql -f nix/bench.sql
+
+.PHONY: test
+test:
+	python -m pytest -vv
