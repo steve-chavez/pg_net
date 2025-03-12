@@ -60,8 +60,7 @@ let
     export BUILD_DIR="build-$_arg_version"
 
     # fail fast for gdb command requirement
-    extension_name=pg_net
-    pid_file_name="$BUILD_DIR"/"$extension_name".pid
+    pid_file_name="$BUILD_DIR"/bgworker.pid
 
     if [ "$_arg_operation" == gdb ] && [ ! -e "$pid_file_name" ]; then
         echo 'The background worker is not started. First you have to run "nxpg psql".'
@@ -103,12 +102,12 @@ let
 
       options="-F -c listen_addresses=\"\" -c log_min_messages=\"''${LOG_MIN_MESSAGES:-INFO}\" -k $PGDATA"
 
-      ext_options="-c shared_preload_libraries=$extension_name"
+      ext_options="-c shared_preload_libraries=pg_net"
 
       pg_ctl start -o "$options" -o "$ext_options"
 
       # save pid for future gdb invocation
-      psql -t -c "\o $pid_file_name" -c "select pid from pg_stat_activity where backend_type ilike '%$extension_name%'"
+      psql -t -c "\o $pid_file_name" -c "select pid from pg_stat_activity where backend_type ilike '%pg_net%'"
       ${gnused}/bin/sed '/^''$/d;s/[[:blank:]]//g' -i "$pid_file_name"
     fi
 
