@@ -101,20 +101,36 @@ let
       export PGUSER=postgres
       export PGDATABASE=postgres
 
-      trap 'pg_ctl stop -m i && rm -rf "$tmpdir" && rm "$pid_file_name"' sigint sigterm exit
+      trap 'pg_ctl stop -m i && rm -rf "$tmpdir" && rm -rf "$pid_file_name"' sigint sigterm exit
 
       PGTZ=UTC initdb --no-locale --encoding=UTF8 --nosync -U "$PGUSER"
 
+      init_script=./test/init.sh
+
+      if [ -f $init_script ]; then
+        bash $init_script
+      fi
+
       # pg versions older than 16 don't support adding "-c" to initdb to add these options
       # so we just modify the resulting postgresql.conf to avoid an error
-      echo "dynamic_library_path='\$libdir:$(pwd)/$BUILD_DIR'" >> "$PGDATA"/postgresql.conf
-      echo "extension_control_path='\$system:$(pwd)/$BUILD_DIR'" >> "$PGDATA"/postgresql.conf
+      {
+        echo "dynamic_library_path='\$libdir:$(pwd)/$BUILD_DIR'"
+        echo "extension_control_path='\$system:$(pwd)/$BUILD_DIR'"
+        echo "include 'init.conf'"
+      } >> "$PGDATA"/postgresql.conf
 
-      options="-F -c listen_addresses=\"\" -c log_min_messages=\"''${LOG_MIN_MESSAGES:-INFO}\" -k $PGDATA"
+      init_conf=./test/init.conf
 
-      ext_options="-c shared_preload_libraries=${extensionName}"
+      if [ -f $init_conf ]; then
+        cp $init_conf "$tmpdir"/init.conf
+        sed -i "s|@TMPDIR@|$tmpdir|g" "$tmpdir"/init.conf
+      else
+        touch "$tmpdir"/init.conf
+      fi
 
-      pg_ctl start -o "$options" -o "$ext_options"
+      options="-F -c listen_addresses=\"\" -k $PGDATA"
+
+      pg_ctl start -o "$options"
 
       createdb contrib_regression
 
