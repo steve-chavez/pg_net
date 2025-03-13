@@ -8,6 +8,7 @@ mkShell {
     let
       nginxCustom = callPackage ./nix/nginxCustom.nix {};
       nixopsScripts = callPackage ./nix/nixopsScripts.nix {};
+      nxpg = callPackage ./nix/nxpg.nix {inherit fetchFromGitHub;};
       pythonDeps = with python3Packages; [
         pytest
         psycopg2
@@ -15,7 +16,7 @@ mkShell {
       ];
     in
     [
-      (callPackage ../nxpg/nxpg.nix {})
+      nxpg
       pythonDeps
       nginxCustom.nginxScript
       curl
