@@ -1,6 +1,5 @@
-{ stdenv, lib, makeWrapper, fetchurl, writeShellScriptBin, findutils, entr, callPackage, lcov, pidFileName, gnused, gdb, writeText} :
+{ stdenv, lib, makeWrapper, fetchurl, writeShellScriptBin, findutils, entr, callPackage, lcov, gnused, gdb, writeText} :
 let
-  prefix = "nxpg";
   ourPg = callPackage ./postgresql {
     inherit lib;
     inherit stdenv;
@@ -8,14 +7,6 @@ let
     inherit makeWrapper;
     inherit callPackage;
   };
-  supportedPgs = [
-    ourPg.postgresql_17
-    ourPg.postgresql_16
-    ourPg.postgresql_15
-    ourPg.postgresql_14
-    ourPg.postgresql_13
-    ourPg.postgresql_12
-  ];
   blo =
     let
       makefileContents = builtins.readFile ../Makefile;

@@ -33,9 +33,11 @@ PG_CPPFLAGS := $(CPPFLAGS) -DEXTVERSION=\"$(EXTVERSION)\"
 
 build: $(BUILD_DIR)/$(EXTENSION).so $(BUILD_DIR)/$(EXTENSION)--$(EXTVERSION).sql $(BUILD_DIR)/$(EXTENSION).control
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+$(BUILD_DIR)/.gitignore:
 	mkdir -p $(BUILD_DIR)
 	echo "*" > $(BUILD_DIR)/.gitignore
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_DIR)/.gitignore
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql

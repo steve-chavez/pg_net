@@ -16,7 +16,7 @@ mkShell {
         sqlalchemy
       ];
       format = callPackage ./nix/format.nix {};
-      nxpg = callPackage ./nix/nxpg.nix {inherit pidFileName;};
+      nxpg = callPackage ./nix/nxpg.nix {};
     in
     [
       pythonDeps
