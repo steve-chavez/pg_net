@@ -6,8 +6,6 @@ with import (builtins.fetchTarball {
 mkShell {
   buildInputs =
     let
-      pidFileName = "net_worker.pid";
-      gdbScript = callPackage ./nix/gdbScript.nix {inherit pidFileName;};
       nginxCustom = callPackage ./nix/nginxCustom.nix {};
       nixopsScripts = callPackage ./nix/nixopsScripts.nix {};
       pythonDeps = with python3Packages; [
@@ -15,18 +13,14 @@ mkShell {
         psycopg2
         sqlalchemy
       ];
-      format = callPackage ./nix/format.nix {};
-      nxpg = callPackage ./nix/nxpg.nix {};
     in
     [
+      (callPackage ../nxpg/nxpg.nix {})
       pythonDeps
-      format.do format.doCheck
       nginxCustom.nginxScript
       curl
     ] ++
-    nixopsScripts ++
-    lib.optional stdenv.isLinux [gdbScript] ++
-    nxpg;
+    nixopsScripts;
   shellHook = ''
     export HISTFILE=.history
   '';
