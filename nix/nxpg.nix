@@ -116,11 +116,17 @@ let
 
       pg_ctl start -o "$options" -o "$ext_options"
 
+      createdb contrib_regression
+
+      init_file=test/init.sql
+
+      if [ -f $init_file ]; then
+        psql -v ON_ERROR_STOP=1 -f $init_file -d contrib_regression
+      fi
+
       # save pid for future gdb invocation
       psql -t -c "\o $pid_file_name" -c "select pid from pg_stat_activity where backend_type ilike '%${extensionName}%'"
       ${gnused}/bin/sed '/^''$/d;s/[[:blank:]]//g' -i "$pid_file_name"
-
-      make on-tmp-start
     fi
 
     case "$_arg_operation" in

@@ -52,13 +52,6 @@ $(BUILD_DIR)/$(EXTENSION).so: $(EXTENSION).so
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
-.PHONY: on-tmp-start
-on-tmp-start:
-	psql -v ON_ERROR_STOP=1 -c "create database pre_existing" -d postgres
-	psql -v ON_ERROR_STOP=1 -c "create role pre_existing nosuperuser login" -d postgres
-	psql -v ON_ERROR_STOP=1 -c "create extension pg_net" -d postgres
-	psql -f nix/bench.sql
-
 .PHONY: test
 test:
 	python -m pytest -vv
