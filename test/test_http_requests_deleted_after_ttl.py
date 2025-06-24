@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import text
 
 def test_http_requests_deleted_after_ttl(sess):
-    """Check that http requests are deleted within a few seconds of their ttl"""
+    """Check that http requests will be deleted when they reach their ttl, not immediately but when the worker starts again"""
 
     # commit to avoid "cannot run inside a transaction block" error, see https://stackoverflow.com/a/75757326/4692662
     sess.execute(text("COMMIT"))
@@ -37,6 +37,9 @@ def test_http_requests_deleted_after_ttl(sess):
 
     # Sleep until after request should have been deleted
     time.sleep(5)
+
+    # Wake the worker manually, under normal operation this will happen when new requests are received
+    sess.execute(text("select net.wake()"))
 
     # Ensure the response is now empty
     (count,) = sess.execute(
