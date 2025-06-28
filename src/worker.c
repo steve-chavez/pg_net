@@ -108,6 +108,45 @@ static void publish_state(WorkerStatus s) {
   ConditionVariableBroadcast(&worker_state->cv);
 }
 
+static bool tables_locked = false;
+
+static bool is_extension_loaded(LockRelId *mytbl_lock1, LockRelId *mytbl_lock2){
+  StartTransactionCommand();
+
+  Oid extensionOid = get_extension_oid("pg_net", true);
+  bool is_valid = OidIsValid(extensionOid);
+
+  if(is_valid){
+    Oid relid1 = RangeVarGetRelid(makeRangeVar("net", "http_request_queue", -1), NoLock, false);
+    mytbl_lock1->relId = relid1;
+
+    Oid relid2 = RangeVarGetRelid(makeRangeVar("net", "_http_response", -1), NoLock, false);
+    mytbl_lock2->relId = relid2;
+  }
+    /*StartTransactionCommand();*/
+
+    /*Oid net_oid = get_namespace_oid("net", false);*/
+    /*elog(info, "net_oid: %d", net_oid);*/
+
+    /*oid req_queue_oid = get_relname_relid("http_request_queue", net_oid);*/
+    /*elog(info, "req_queue_oid: %d", req_queue_oid);*/
+
+    /*Oid resp_oid = get_relname_relid("_http_response", net_oid);*/
+    /*elog(INFO, "resp_oid: %d", resp_oid);*/
+
+    /*CommitTransactionCommand();*/
+
+    /*elog(INFO, "locking");*/
+
+    /*LockRelationOid(req_queue_oid, AccessShareLock);*/
+    /*LockRelationOid(resp_oid, AccessShareLock);*/
+
+
+  CommitTransactionCommand();
+
+  return is_valid;
+}
+
 static void
 net_on_exit(__attribute__ ((unused)) int code, __attribute__ ((unused)) Datum arg){
   pg_atomic_write_u32(&worker_state->should_restart, 0);
@@ -137,6 +176,9 @@ static bool process_interrupts(){
   return restart;
 }
 
+static LockRelId mytbl_lock1;
+static LockRelId mytbl_lock2;
+
 void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
   on_proc_exit(net_on_exit, 0);
 
@@ -150,7 +192,18 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
   BackgroundWorkerInitializeConnection(guc_database_name, guc_username, 0);
   pgstat_report_appname("pg_net " EXTVERSION); // set appname for pg_stat_activity
 
-  elog(INFO, "pg_net_worker started with a config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.username=%s, pg_net.database_name=%s", guc_ttl, guc_batch_size, guc_username, guc_database_name);
+  StartTransactionCommand();
+
+  Oid db_oid = get_database_oid(guc_database_name, false);
+
+  CommitTransactionCommand();
+
+  elog(INFO, "db_oid: %d", db_oid);
+
+  mytbl_lock1.dbId  = db_oid;
+  mytbl_lock2.dbId  = db_oid;
+
+  elog(INFO, "pg_net worker started with a config of: pg_net.ttl=%s, pg_net.batch_size=%d, pg_net.username=%s, pg_net.database_name=%s", guc_ttl, guc_batch_size, guc_username, guc_database_name);
 
   int curl_ret = curl_global_init(CURL_GLOBAL_ALL);
   if(curl_ret != CURLE_OK)
@@ -171,10 +224,29 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
   while (true) {
     publish_state(WS_RUNNING);
 
+    if(!is_extension_loaded(&mytbl_lock1, &mytbl_lock2)){
+      elog(DEBUG1, "pg_net worker waiting for extension to load");
+      WaitLatch(&worker_state->latch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, 1000, PG_WAIT_EXTENSION);
+      ResetLatch(&worker_state->latch);
+      if(process_interrupts())
+        goto restart;
+
+      continue;
+    }
+
+    if(!tables_locked){
+      LockRelationIdForSession(&mytbl_lock1, AccessShareLock);
+      LockRelationIdForSession(&mytbl_lock2, AccessShareLock);
+      tables_locked = true;
+    }
+
     uint32 expected = 1;
     if (!pg_atomic_compare_exchange_u32(&worker_state->should_work, &expected, 0)){
-      elog(DEBUG1, "pg_net_worker waiting for wake");
-      // this will also wait for the `create extension net` to load, since the signal can only come from the request functions inside the `net` schema
+      elog(INFO, "Releasing lock");
+      UnlockRelationIdForSession(&mytbl_lock1, AccessShareLock);
+      UnlockRelationIdForSession(&mytbl_lock2, AccessShareLock);
+      tables_locked = false;
+      elog(DEBUG1, "pg_net worker waiting for wake");
       WaitLatch(&worker_state->latch,
                 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
                 no_timeout,
@@ -188,6 +260,8 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
 
     uint64 requests_consumed = 0;
     uint64 expired_responses = 0;
+
+    elog(INFO, "Querying");
 
     do {
       expired_responses = delete_expired_responses(guc_ttl, guc_batch_size);
@@ -263,6 +337,12 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
   }
 
 restart:
+
+  if(tables_locked){
+    UnlockRelationIdForSession(&mytbl_lock1, AccessShareLock);
+    UnlockRelationIdForSession(&mytbl_lock2, AccessShareLock);
+    tables_locked = false;
+  }
 
   publish_state(WS_EXITED);
 
