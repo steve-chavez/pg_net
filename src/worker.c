@@ -23,6 +23,7 @@ static const int                curl_handle_event_timeout_ms = 1000;
 static const long               queue_processing_wait_timeout_ms = 1000;
 static const int                net_worker_restart_time_sec = 1;
 static const long               no_timeout = -1L;
+static bool                     tables_locked = false;
 
 static char*                    guc_ttl;
 static int                      guc_batch_size;
@@ -110,12 +111,12 @@ static void publish_state(WorkerStatus s) {
   ConditionVariableBroadcast(&worker_state->cv);
 }
 
-static bool is_extension_loaded(WorkerState *ws){
+static bool is_extension_loaded(){
   StartTransactionCommand();
 
   bool extension_exists = OidIsValid(get_extension_oid("pg_net", true));
 
-  if(extension_exists && !(ws->tables_locked)){
+  if(extension_exists && !tables_locked){
     elog(DEBUG1, "accessing table info");
     Oid db_oid = get_database_oid(guc_database_name, false);
 
@@ -151,21 +152,21 @@ static bool is_extension_loaded(WorkerState *ws){
   return extension_exists;
 }
 
-static void lock_extension(WorkerState *ws){
-  if(!(ws->tables_locked)){
+static void lock_extension(){
+  if(!tables_locked){
     elog(DEBUG1, "locking");
     LockRelationIdForSession(&queue_table_lock, AccessShareLock);
     LockRelationIdForSession(&response_table_lock, AccessShareLock);
-    ws->tables_locked = true;
+    tables_locked = true;
   }
 }
 
-static void unlock_extension(WorkerState *ws){
-  if(ws->tables_locked){
+static void unlock_extension(){
+  if(tables_locked){
     elog(DEBUG1, "unlocking");
     UnlockRelationIdForSession(&queue_table_lock, AccessShareLock);
     UnlockRelationIdForSession(&response_table_lock, AccessShareLock);
-    ws->tables_locked = false;
+    tables_locked = false;
   }
 }
 
@@ -173,7 +174,7 @@ static void
 net_on_exit(__attribute__ ((unused)) int code, __attribute__ ((unused)) Datum arg){
   pg_atomic_write_u32(&worker_state->should_restart, 0);
 
-  unlock_extension(worker_state);
+  unlock_extension();
 
   DisownLatch(&worker_state->latch);
 
@@ -234,7 +235,7 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
   while (true) {
     publish_state(WS_RUNNING);
 
-    if(!is_extension_loaded(worker_state)){
+    if(!is_extension_loaded()){
       elog(DEBUG1, "pg_net worker waiting for extension to load");
       WaitLatch(&worker_state->latch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, 1000, PG_WAIT_EXTENSION);
       ResetLatch(&worker_state->latch);
@@ -244,11 +245,11 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
       continue;
     }
 
-    lock_extension(worker_state);
+    lock_extension();
 
     uint32 expected = 1;
     if (!pg_atomic_compare_exchange_u32(&worker_state->should_work, &expected, 0)){
-      unlock_extension(worker_state);
+      unlock_extension();
       elog(DEBUG1, "pg_net worker waiting for wake");
       WaitLatch(&worker_state->latch,
                 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
@@ -341,7 +342,7 @@ void pg_net_worker(__attribute__ ((unused)) Datum main_arg) {
 
 restart:
 
-  unlock_extension(worker_state);
+  unlock_extension();
 
   publish_state(WS_EXITED);
 
@@ -368,7 +369,6 @@ static void net_shmem_startup(void) {
     ConditionVariableInit(&worker_state->cv);
     worker_state->epfd = 0;
     worker_state->curl_mhandle = NULL;
-    worker_state->tables_locked = false;
   }
 }
 

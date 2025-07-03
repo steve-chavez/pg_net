@@ -12,7 +12,6 @@ typedef struct {
   pg_atomic_uint32  should_work;
   pg_atomic_uint32  status;
   Latch             latch;
-  bool              tables_locked;
   ConditionVariable cv;
   int               epfd;
   CURLM             *curl_mhandle;
