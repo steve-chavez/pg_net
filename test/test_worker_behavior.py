@@ -133,6 +133,47 @@ def test_can_delete_rows_while_processing_queue(sess):
     sess.execute(text("select net.wait_until_running()"))
 
 
+def test_truncate_wait_while_processing_queue(sess):
+    """a truncate will wait until the worker is done processing all requests"""
+
+    # commit to avoid "cannot run inside a transaction block" error, see https://stackoverflow.com/a/75757326/4692662
+    sess.execute(text("COMMIT"))
+    sess.execute(text("alter system set pg_net.batch_size to '1';"))
+    sess.execute(text("select net.worker_restart();"))
+    sess.execute(text("select net.wait_until_running();"))
+
+    sess.execute(text(
+        """
+        select net.http_get('http://localhost:8080/pathological?status=200') from generate_series(1,5);
+    """
+    ))
+
+    sess.commit()
+
+    sess.execute(text(
+        """
+        truncate net.http_request_queue;
+    """
+    ))
+
+    sess.commit()
+
+    (count,) = sess.execute(text(
+        """
+        select count(*) from net._http_response;
+    """
+    )).fetchone()
+    assert count == 5
+
+    sess.commit()
+
+    # commit to avoid "cannot run inside a transaction block" error, see https://stackoverflow.com/a/75757326/4692662
+    sess.execute(text("COMMIT"))
+    sess.execute(text("alter system reset pg_net.batch_size"))
+    sess.execute(text("select net.worker_restart()"))
+    sess.execute(text("select net.wait_until_running()"))
+
+
 def test_no_failure_on_drop_extension(sess):
     """while waiting for a slow request, a drop extension should wait and not crash the worker"""
 
