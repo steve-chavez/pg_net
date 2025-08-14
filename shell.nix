@@ -6,6 +6,7 @@ with import (builtins.fetchTarball {
 mkShell {
   buildInputs =
     let
+      ourCurl = callPackage ./nix/curl.nix {};
       nixpkgs2405 = import (builtins.fetchTarball {
           name = "24.05";
           url = "https://github.com/NixOS/nixpkgs/archive/refs/tags/24.05.tar.gz";
@@ -25,7 +26,8 @@ mkShell {
       xpg.xpg
       pythonDeps
       nginxCustom.nginxScript
-      curlWithGnuTls
+      ourCurl
+      gnutls.dev
       loadtest
     ] ++ nixopsScripts;
   shellHook = ''
